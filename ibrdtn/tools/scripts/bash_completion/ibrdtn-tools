@@ -52,7 +52,7 @@ _ibrdtn_tools_destination()
 
 	return 0
 } &&
-complete -F _ibrdtn_tools_destination dtnping dtntracepath dtntunnel dtnsend
+complete -F _ibrdtn_tools_destination dtnping dtntracepath dtntunnel dtnsend dtnsend_v2
 
 _ibrdtn_tools_help()
 {

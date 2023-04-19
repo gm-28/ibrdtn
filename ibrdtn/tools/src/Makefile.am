@@ -41,6 +41,7 @@ endif
 dtnping_SOURCES = dtnping.cpp
 dtnrecv_SOURCES = dtnrecv.cpp
 dtnsend_SOURCES = dtnsend.cpp
+dtnsend_v2_SOURCES = dtnsend_v2.cpp
 dtntunnel_SOURCES = dtntunnel.cpp
 dtntracepath_SOURCES = dtntracepath.cpp
 dtntrigger_SOURCES = dtntrigger.cpp

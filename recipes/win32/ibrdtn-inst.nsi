@@ -210,6 +210,7 @@ Section "Tools" SecTools
   File "dtnping.exe"
   File "dtnrecv.exe"
   File "dtnsend.exe"
+  File "dtnsend_v2.exe"
   File "dtnstream.exe"
   File "dtntracepath.exe"
   File "dtntrigger.exe"
