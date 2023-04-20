@@ -51,7 +51,7 @@ std::vector<ibrcommon::BLOB::Reference> splitBlob(const ibrcommon::BLOB::Referen
 
 void print_help()
 {
-	std::cout << "-- dtnsend (IBR-DTN) --" << std::endl
+	std::cout << "-- dtnsend_v2 (IBR-DTN) --" << std::endl
 			<< "Syntax: dtnsend [options] <dst> <filename>"  << std::endl
 			<< " <dst>            Set the destination eid (e.g. dtn://node/filetransfer)" << std::endl
 			<< " <filename>       The file to transfer" << std::endl << std::endl
