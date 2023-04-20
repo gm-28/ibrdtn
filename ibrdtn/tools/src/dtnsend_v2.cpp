@@ -262,7 +262,7 @@ int main(int argc, char *argv[])
 						b.destination = file_destination;
 
 						// add payload block with the reference
-						b.push_back(ref);
+						b.push_back(ref_chunks[i]);
 
 						// set destination address to non-singleton
 						if (bundle_group) b.set(dtn::data::PrimaryBlock::DESTINATION_IS_SINGLETON, false);
