@@ -251,7 +251,7 @@ int main(int argc, char *argv[])
 				//Split the file BLOB into smaller BLOBs
 				auto ref_chunks = splitBlob(ref,chunk_size);
 
-				for(int i = 1; i < ref_chunks.size(); i++)
+				for(int i = 0; i < ref_chunks.size(); i++)
 				{
 					for(int u=0; u<copies; ++u)
 					{
@@ -261,7 +261,7 @@ int main(int argc, char *argv[])
 						// set the destination
 						b.destination = file_destination;
 
-						// add payload block with the reference
+						// add payload block with the references
 						b.push_back(ref_chunks[i]);
 
 						// set destination address to non-singleton
