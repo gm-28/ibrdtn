@@ -270,7 +270,7 @@ namespace dtn
 					std::cout << " -k              stop the running daemon" << std::endl;
 					std::cout << " -p <file>       store the pid in this pidfile" << std::endl;
 #endif
-					std::cout << " -i <interface>  interface to bind on (e.g. eth0)" << std::endl;
+					std::cout << " -i <interface>  interface to bind on (e.g.  eth0)" << std::endl;
 					std::cout << " -d <level>      enable debugging and set a verbose level" << std::endl;
 					std::cout << " -q              enables the quiet mode (no logging to the console)" << std::endl;
 					std::cout << " -t <threads>    specify a number of threads for parallel event processing" << std::endl;
