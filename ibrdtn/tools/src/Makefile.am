@@ -6,7 +6,7 @@ AM_LDFLAGS = @ibrdtn_LIBS@ @DAEMON_LIBS@ @ARCHIVE_LIBS@ @tffs_LIBS@
 
 # this lists the binaries to produce, the (non-PHONY, binary) targets in
 # the previous manual Makefile
-bin_PROGRAMS = dtnping dtnrecv dtnsend dtntracepath dtntrigger dtnconvert dtnstream
+bin_PROGRAMS = dtnping dtnrecv dtnsend dtnsend_v2 dtntracepath dtntrigger dtnconvert dtnstream
 
 # compile dtninbox and dtnoutbox if libarchive is present
 if LIBARCHIVE
