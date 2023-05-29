@@ -2,10 +2,64 @@
 #include <string.h>
 #include <stdlib.h>
 #include <libssh/libssh.h>
+#include <libssh/sftp.h>
 #include <iostream>
 #include "keyconfig.h" 
 
+#include "config.h"
+#include <ibrdtn/api/Client.h>
+#include <ibrcommon/net/socket.h>
+#include <ibrcommon/thread/Mutex.h>
+#include <ibrcommon/thread/MutexLock.h>
+#include <ibrcommon/data/BLOB.h>
+#include <ibrcommon/Logger.h>
+
+#include <iostream>
+#include <fstream>
+#include "ibrdtn/data/Serializer.h"
+#include "ibrdtn/data/Bundle.h"
+#include <vector>
+
 using namespace std;
+
+/**
+ * Splits aa BLOB into smaller chunks of a given size and returns a vector of BLOB references.
+ * 
+ * @param blob The BLOB to be split.
+ * @param chunkSize The size of each chunk in bytes.
+ * 
+ * @return A vector of BLOB references, each representing a chunk of the original BLOB.
+ */
+std::vector<ibrcommon::BLOB::Reference> splitBlob(const ibrcommon::BLOB::Reference &blob, const size_t chunkSize)
+{
+    std::vector<ibrcommon::BLOB::Reference> chunks;
+
+	// Create a new BLOB reference for this chunk
+	ibrcommon::BLOB::Reference blobref = blob;
+
+    // Get an iostream for the BLOB
+	ibrcommon::BLOB::iostream io = blobref.iostream();
+
+    size_t remainingSize = blob.size();
+    size_t offset = 0;
+
+    while (remainingSize > 0) {
+        size_t chunkLength = std::min(chunkSize, remainingSize);
+
+        ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::create();
+        ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();
+
+        (*io).seekg(offset, std::ios::beg);
+        ibrcommon::BLOB::copy(*chunkStream, *io, chunkLength);
+
+        chunks.push_back(chunkBlob);
+
+        remainingSize -= chunkLength;
+        offset += chunkLength;
+    }
+
+    return chunks;
+}
 
 void disconnect(ssh_channel channel_cmd, ssh_channel channel, ssh_session session) {
     // Close the data channel
@@ -92,13 +146,15 @@ static ssh_session start_session(const char* host, const char* user, const char*
     return session;
 }
 
-int main() {
+int main()
+{
     int rc;
 
+    //Setup the sessions
     ssh_session session1 = start_session("localhost", "moreira1", KEY_PATH, "2222");
     ssh_session session2 = start_session("localhost", "moreira2", KEY_PATH, "2223");
 
-    // Execute a command on the virtual machine
+    // Start the daemons
     ssh_channel channel = ssh_channel_new(session1);
     rc = ssh_channel_open_session(channel);
     if (rc != SSH_OK) {
@@ -118,7 +174,6 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // Execute a command on the second virtual machine
     ssh_channel channel2 = ssh_channel_new(session2);
     rc = ssh_channel_open_session(channel2);
     if (rc != SSH_OK) {
@@ -137,6 +192,114 @@ int main() {
         ssh_free(session2);
         exit(EXIT_FAILURE);
     }
+
+    std::string file_destination = "dtn://local/fileDestination";
+    std::string file_source = "fileSource";
+	unsigned int lifetime = 3600;
+	bool use_stdin = false;
+	std::string filename;
+	ibrcommon::File unixdomain;
+	int priority = 1;
+	int copies = 1;
+	size_t chunk_size = 1024;
+	bool bundle_encryption = false;
+	bool bundle_signed = false;
+	bool bundle_custody = false;
+	bool bundle_compression = false;
+	bool bundle_group = false;
+
+   	std::list<std::string> arglist;
+
+    // if (arglist.size() <= 1)
+	// {
+	// 	return -1;
+	// } else if (arglist.size() == 2)
+	// {
+	// 	std::list<std::string>::iterator iter = arglist.begin(); ++iter;
+
+	// 	// the first parameter is the destination
+	// 	file_destination = (*iter);
+
+	// 	use_stdin = true;
+	// }
+	// else if (arglist.size() > 2)
+	// {
+	// 	std::list<std::string>::iterator iter = arglist.begin(); ++iter;
+
+	// 	// the first parameter is the destination
+	// 	file_destination = (*iter); ++iter;
+
+	// 	// the second parameter is the filename
+	// 	filename = (*iter);
+	// }
+
+    filename = "sendFile";
+
+    // open file as read-only BLOB
+    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
+
+    //Split the file BLOB into smaller BLOBs
+    auto ref_chunks = splitBlob(ref,chunk_size);
+
+    for(int i = 0; i < ref_chunks.size(); i++)
+    {
+        // create a bundle from the file
+        dtn::data::Bundle b;
+
+        // set the destination
+        b.destination = file_destination;
+
+        // add payload block with the references
+        b.push_back(ref_chunks[i]);
+
+        // set destination address to non-singleton
+        if (bundle_group) b.set(dtn::data::PrimaryBlock::DESTINATION_IS_SINGLETON, false);
+
+        // enable encryption if requested
+        if (bundle_encryption) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_ENCRYPT, true);
+
+        // enable signature if requested
+        if (bundle_signed) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_SIGN, true);
+
+        // enable custody transfer if requested
+        if (bundle_custody) {
+            b.set(dtn::data::PrimaryBlock::CUSTODY_REQUESTED, true);
+            b.custodian = dtn::data::EID("api:me");
+        }
+
+        // enable compression
+        if (bundle_compression) b.set(dtn::data::PrimaryBlock::IBRDTN_REQUEST_COMPRESSION, true);
+
+        // set the lifetime
+        b.lifetime = lifetime;
+
+        // set the bundles priority
+        b.setPriority(dtn::data::PrimaryBlock::PRIORITY(priority));
+
+        // Open the output file stream
+        std::ofstream outputFile("bundle.bin", std::ios::binary);
+
+        // Create a DefaultSerializer object with the output stream
+        dtn::data::DefaultSerializer serializer(outputFile);
+
+        // Serialize the bundle and write it to the file
+        serializer << b;
+        
+        // Close the output file stream
+        outputFile.close();
+        
+        //send the bundle
+    }
+
+    /*Create a bundle [Done]
+    **Generate the bundle file [Done]
+    **Send the bundle file to virtual machine 1 via ssh
+    **Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend
+    **Receive the bundle on virtual machine 2
+    **Generate the bundle from the file [Done]
+    **Send the bundle file to host via ssh
+    **Recreate the bundle [Done]
+    */
 
     ssh_channel channel_cmd = ssh_channel_new(session1);
     rc = ssh_channel_open_session(channel_cmd);
@@ -196,7 +359,44 @@ int main() {
         c++;
         if(c == 5) break;
     }
-    
+
+    // Open the input file stream
+    std::ifstream inputFile("bundle.bin", std::ios::binary);
+
+    // Create a DefaultDeserializer object with the input stream
+    dtn::data::DefaultDeserializer deserializer(inputFile);
+
+    // Create a bundle object
+    dtn::data::Bundle bundle;
+
+    // Deserialize the bundle from the file
+    deserializer >> bundle;
+
+    // Close the input file stream
+    inputFile.close();
+
+    // get the reference to the blob
+    ibrcommon::BLOB::Reference ref2 = bundle.find<dtn::data::PayloadBlock>().getBLOB();
+    std::fstream file;
+    // write the data to output
+    bool _stdout = true;
+
+    if (_stdout)
+    {
+        std::cout << ref.iostream()->rdbuf() << std::flush;
+    }
+    else
+    {
+        // write data to temporary file
+        try {
+            std::cout << "Bundle received." << std::endl;
+
+            file << ref.iostream()->rdbuf();
+        } catch (const std::ios_base::failure&) {
+
+        }
+    }
+
     // Close the channels and disconnect from the virtual machines
     disconnect(channel_cmd, channel, session1);
     disconnect(channel2_cmd, channel2, session2);
