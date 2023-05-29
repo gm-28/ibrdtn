@@ -5,6 +5,7 @@
 #include <libssh/sftp.h>
 #include <iostream>
 #include "keyconfig.h" 
+#include <fcntl.h>
 
 #include "config.h"
 #include <ibrdtn/api/Client.h>
@@ -184,16 +185,16 @@ int main()
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel2, "dtnd -i enp0s3");
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error executing command on the second virtual machine: %s\n", ssh_get_error(session2));
-        ssh_channel_free(channel2);
-        ssh_disconnect(session2);
-        ssh_free(session2);
-        exit(EXIT_FAILURE);
-    }
+    // rc = ssh_channel_request_exec(channel2, "dtnd -i enp0s3");
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error executing command on the second virtual machine: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
 
-    std::string file_destination = "dtn://local/fileDestination";
+    std::string file_destination = "dtn://moreira2-VirtualBox/dtnRecv";
     std::string file_source = "fileSource";
 	unsigned int lifetime = 3600;
 	bool use_stdin = false;
@@ -241,6 +242,7 @@ int main()
     //Split the file BLOB into smaller BLOBs
     auto ref_chunks = splitBlob(ref,chunk_size);
 
+    //generate bundle()
     for(int i = 0; i < ref_chunks.size(); i++)
     {
         // create a bundle from the file
@@ -291,15 +293,65 @@ int main()
         //send the bundle
     }
 
-    /*Create a bundle [Done]
-    **Generate the bundle file [Done]
-    **Send the bundle file to virtual machine 1 via ssh
-    **Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend
-    **Receive the bundle on virtual machine 2
-    **Generate the bundle from the file [Done]
-    **Send the bundle file to host via ssh
-    **Recreate the bundle [Done]
-    */
+    // Open the file for reading
+    std::ifstream bundleFile("bundle.bin", std::ios::binary);
+    if (!bundleFile.is_open()) {
+        std::cerr << "Error opening bundle file" << std::endl;
+        return 1;
+    }
+
+    // Get the size of the file
+    bundleFile.seekg(0, std::ios::end);
+    std::streampos fileSize = bundleFile.tellg();
+    bundleFile.seekg(0, std::ios::beg);
+
+    // Allocate a buffer to store the file data
+    char* buffer = new char[fileSize];
+
+    // Read the file data into the buffer
+    bundleFile.read(buffer, fileSize);
+    bundleFile.close();
+    // Create an SFTP session
+    sftp_session sftp = sftp_new(session1);
+    if (sftp == nullptr) {
+        std::cerr << "Error creating SFTP session: " << ssh_get_error(session1) << std::endl;
+        ssh_disconnect(session1);
+        ssh_free(session1);
+        delete[] buffer;
+        return 1;
+    }
+
+    // Initialize the SFTP session
+    rc = sftp_init(sftp);
+    if (rc != SSH_OK) {
+        std::cerr << "Error initializing SFTP session: " << ssh_get_error(session1) << std::endl;
+        sftp_free(sftp);
+        ssh_disconnect(session1);
+        ssh_free(session1);
+        delete[] buffer;
+        return 1;
+    }
+
+    // Open a file on the remote server for writing
+    sftp_file remoteFile = sftp_open(sftp, "ibrdtn/ibrdtn/tools/src/bundle.bin", O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (remoteFile == nullptr) {
+        std::cerr << "Error opening remote file: " << ssh_get_error(session1) << std::endl;
+        sftp_free(sftp);
+        ssh_disconnect(session1);
+        ssh_free(session1);
+        delete[] buffer;
+        return 1;
+    }
+
+    // Write the file data to the remote file
+    rc = sftp_write(remoteFile, buffer, fileSize);
+    if (rc < 0) {
+        std::cerr << "Error writing to remote file: " << ssh_get_error(session1) << std::endl;
+    }
+
+    // Close the remote file and free the SFTP session
+    sftp_close(remoteFile);
+    sftp_free(sftp);
 
     ssh_channel channel_cmd = ssh_channel_new(session1);
     rc = ssh_channel_open_session(channel_cmd);
@@ -312,7 +364,7 @@ int main()
     }
 
 
-    rc = ssh_channel_request_exec(channel_cmd, "dtnping dtn://moreira2-VirtualBox/echo");
+    rc = ssh_channel_request_exec(channel_cmd, "dtnsend_v2 dtn://moreira2-VirtualBox/dtnRecv bundle.bin");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session1));
         ssh_channel_free(channel_cmd);
@@ -323,42 +375,42 @@ int main()
 
     int c = 0;
     // Read and print the command output
-    char buffer[1024];
+    char buffer2[1024];
     int nbytes;
     // Read and print the command output
-    while ((nbytes = ssh_channel_read(channel_cmd, buffer, sizeof(buffer), 0)) > 0) {
-        fwrite(buffer, 1, nbytes, stdout);
+    while ((nbytes = ssh_channel_read(channel_cmd, buffer2, sizeof(buffer2), 0)) > 0) {
+        fwrite(buffer2, 1, nbytes, stdout);
         c++;
         if(c == 5) break;
     }
 
-    ssh_channel channel2_cmd = ssh_channel_new(session2);
-    rc = ssh_channel_open_session(channel2_cmd);
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error opening channel for the second virtual machine: %s\n", ssh_get_error(session2));
-        ssh_channel_free(channel2_cmd);
-        ssh_disconnect(session2);
-        ssh_free(session2);
-        exit(EXIT_FAILURE);
-    }
+    // ssh_channel channel2_cmd = ssh_channel_new(session2);
+    // rc = ssh_channel_open_session(channel2_cmd);
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error opening channel for the second virtual machine: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2_cmd);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
 
 
-    rc = ssh_channel_request_exec(channel2_cmd, "dtnping dtn://moreira1-VirtualBox/echo");
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
-        ssh_channel_free(channel2_cmd);
-        ssh_disconnect(session2);
-        ssh_free(session2);
-        exit(EXIT_FAILURE);
-    }
+    // rc = ssh_channel_request_exec(channel2_cmd, "dtnping dtn://moreira1-VirtualBox/echo");
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2_cmd);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
 
-    c =0;
-    // Read and print the command output
-    while ((nbytes = ssh_channel_read(channel2_cmd, buffer, sizeof(buffer), 0)) > 0) {
-        fwrite(buffer, 1, nbytes, stdout);
-        c++;
-        if(c == 5) break;
-    }
+    // c =0;
+    // // Read and print the command output
+    // while ((nbytes = ssh_channel_read(channel2_cmd, buffer2, sizeof(buffer2), 0)) > 0) {
+    //     fwrite(buffer2, 1, nbytes, stdout);
+    //     c++;
+    //     if(c == 5) break;
+    // }
 
     // Open the input file stream
     std::ifstream inputFile("bundle.bin", std::ios::binary);
@@ -381,25 +433,36 @@ int main()
     // write the data to output
     bool _stdout = true;
 
-    if (_stdout)
-    {
-        std::cout << ref.iostream()->rdbuf() << std::flush;
-    }
-    else
-    {
-        // write data to temporary file
-        try {
-            std::cout << "Bundle received." << std::endl;
+    // if (_stdout)
+    // {
+    //     std::cout << ref.iostream()->rdbuf() << std::flush;
+    // }
+    // else
+    // {
+    //     // write data to temporary file
+    //     try {
+    //         std::cout << "Bundle received." << std::endl;
 
-            file << ref.iostream()->rdbuf();
-        } catch (const std::ios_base::failure&) {
+    //         file << ref.iostream()->rdbuf();
+    //     } catch (const std::ios_base::failure&) {
 
-        }
-    }
+    //     }
+    // }
 
     // Close the channels and disconnect from the virtual machines
     disconnect(channel_cmd, channel, session1);
-    disconnect(channel2_cmd, channel2, session2);
+    // disconnect(channel2_cmd, channel2, session2);
 
     return 0;
 }
+
+    /* To Do:
+    Create a bundle [Done]
+    Generate the bundle file [Done]
+    Send the bundle file to virtual machine 1 via ssh [Done]
+        Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend
+        Receive the bundle on virtual machine 2
+    Generate the bundle from the file [Done]
+        Send the bundle file to host via ssh
+    Recreate the bundle [Done]
+    */

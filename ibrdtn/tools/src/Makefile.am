@@ -2,11 +2,11 @@ AUTOMAKE_OPTIONS = foreign subdir-objects
 
 # what flags you want to pass to the C compiler & linker
 AM_CPPFLAGS = -I@top_srcdir@/src @ibrdtn_CFLAGS@ @DAEMON_CFLAGS@ @ARCHIVE_CFLAGS@  @tffs_CFLAGS@
-AM_LDFLAGS = @ibrdtn_LIBS@ @DAEMON_LIBS@ @ARCHIVE_LIBS@ @tffs_LIBS@
+AM_LDFLAGS = @ibrdtn_LIBS@ @DAEMON_LIBS@ @ARCHIVE_LIBS@ @tffs_LIBS@-lssh
 
 # this lists the binaries to produce, the (non-PHONY, binary) targets in
 # the previous manual Makefile
-bin_PROGRAMS = dtnping dtnrecv dtnsend dtnsend_v2 dtntracepath dtntrigger dtnconvert dtnstream
+bin_PROGRAMS = dtnping dtnrecv dtnsend dtnsend_v2 dtntracepath dtntrigger dtnconvert dtnstream test
 
 # compile dtninbox and dtnoutbox if libarchive is present
 if LIBARCHIVE
@@ -46,6 +46,7 @@ dtntunnel_SOURCES = dtntunnel.cpp
 dtntracepath_SOURCES = dtntracepath.cpp
 dtntrigger_SOURCES = dtntrigger.cpp
 dtnconvert_SOURCES = dtnconvert.cpp
+test_SOURCES = test.cpp
 
 dtnstream_SOURCES = \
 	dtnstream.cpp \
