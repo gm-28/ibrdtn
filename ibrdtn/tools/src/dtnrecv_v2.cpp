@@ -1,3 +1,23 @@
+/*
+ * dtnrecv.cpp
+ *
+ * Copyright (C) 2011 IBR, TU Braunschweig
+ *
+ * Written-by: Johannes Morgenroth <morgenroth@ibr.cs.tu-bs.de>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -8,21 +28,59 @@
 #include <fcntl.h>
 
 #include "config.h"
-// #include "manager.h"
 #include <ibrdtn/api/Client.h>
 #include <ibrcommon/net/socket.h>
+#include <ibrcommon/net/socketstream.h>
 #include <ibrcommon/thread/Mutex.h>
 #include <ibrcommon/thread/MutexLock.h>
-#include <ibrcommon/data/BLOB.h>
+#include <ibrcommon/thread/SignalHandler.h>
 #include <ibrcommon/Logger.h>
 
+#include <sys/types.h>
 #include <iostream>
-#include <fstream>
-#include "ibrdtn/data/Serializer.h"
-#include "ibrdtn/data/Bundle.h"
-#include <vector>
 
-using namespace std;
+#include <stdio.h>
+#include <stdlib.h>
+#include <libssh/libssh.h>
+
+void print_help()
+{
+	std::cout << "-- dtnrecv (IBR-DTN) --" << std::endl
+			<< "Syntax: dtnrecv [options]"  << std::endl << std::endl
+			<< "* optional parameters *" << std::endl
+			<< " -h|--help        Display this text" << std::endl
+			<< " --file <path>    Write the incoming data to the a file instead of the" << std::endl
+			<< "                  standard output" << std::endl
+			<< " --name <name>    Set the application name (e.g. filetransfer)" << std::endl
+			<< " --timeout <seconds>" << std::endl
+			<< "                  Receive timeout in seconds" << std::endl
+			<< " --count <n>      Receive that many bundles" << std::endl
+			<< " --group <group>  Join a group" << std::endl
+			<< " -U <socket>      Connect to UNIX domain socket API" << std::endl;
+}
+
+dtn::api::Client *_client = NULL;
+ibrcommon::socketstream *_conn = NULL;
+
+int h = 0;
+bool _stdout = true;
+
+void term(int signal)
+{
+	if (!_stdout)
+	{
+		std::cout << h << " bundles received." << std::endl;
+	}
+
+	if (signal >= 1)
+	{
+		if (_client != NULL)
+		{
+			_client->close();
+			_conn->close();
+		}
+	}
+}
 
 bool serializeBundleToFile(const std::string filename, const dtn::data::Bundle bundle) {
     // Open the output file stream
@@ -49,7 +107,6 @@ bool serializeBundleToFile(const std::string filename, const dtn::data::Bundle b
         return false;
     }
 }
-
 void disconnect(ssh_channel channel) {
     // Close the channel
     ssh_channel_send_eof(channel);
@@ -129,14 +186,14 @@ bool transferFileToRemote(ssh_session session, const std::string& localFilePath,
     return true;
 }
 
-void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination,const std::string destinationFilePath) {
+void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination) {
     bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath);
     if (!transferSuccess) {
         std::cerr << "Error transferring file: " << localFilePath << std::endl;
         return;
     }
 
-    std::string command = "dtnsend " + destination + " " + destinationFilePath;
+    std::string command = "dtnsend_v2 " + destination + " " + remoteFilePath;
     std::cout << command.c_str();
     std::cout << "\n";
 
@@ -275,196 +332,178 @@ static ssh_session start_session(const char* host, const char* user, const char*
     return session;
 }
 
-int main(){
-    std::string file_destination = "dtn://moreira2-VirtualBox/dtnRecv";
-    std::string file_source = "fileSource";
+int main(int argc, char *argv[])
+{
+	// logging options
+	const unsigned char logopts = ibrcommon::Logger::LOG_DATETIME | ibrcommon::Logger::LOG_LEVEL;
 
-	unsigned int lifetime = 3600;
-	bool use_stdin = false;
-	std::string filename;
+	// error filter
+	unsigned char loglevel = 0;
+
+	// create signal handler
+	ibrcommon::SignalHandler sighandler(term);
+	sighandler.handle(SIGINT);
+	sighandler.handle(SIGTERM);
+	sighandler.initialize();
+
+	int ret = EXIT_SUCCESS;
+	std::string filename = "";
+	std::string name = "dtnRecv";
+	dtn::data::EID group;
+	int timeout = 0;
+	int count   = 1;
 	ibrcommon::File unixdomain;
-	int priority = 1;
-	int copies = 1;
-	size_t chunk_size = 1024;
-	bool bundle_encryption = false;
-	bool bundle_signed = false;
-	bool bundle_custody = false;
-	bool bundle_compression = false;
-	bool bundle_group = false;
 
-   	std::list<std::string> arglist;
+	for (int i = 0; i < argc; ++i)
+	{
+		std::string arg = argv[i];
 
-    
-    // if (arglist.size() <= 1)
-	// {
-	// 	return -1;
-	// } else if (arglist.size() == 2)
-	// {
-	// 	std::list<std::string>::iterator iter = arglist.begin(); ++iter;
+		// print help if requested
+		if (arg == "-h" || arg == "--help")
+		{
+			print_help();
+			return ret;
+		}
 
-	// 	// the first parameter is the destination
-	// 	file_destination = (*iter);
+		if (arg == "--logging")
+		{
+			loglevel |= ibrcommon::Logger::LOGGER_ALL ^ ibrcommon::Logger::LOGGER_DEBUG;
+		}
 
-	// 	use_stdin = true;
-	// }
-	// else if (arglist.size() > 2)
-	// {
-	// 	std::list<std::string>::iterator iter = arglist.begin(); ++iter;
+		if (arg == "--debug")
+		{
+			loglevel |= ibrcommon::Logger::LOGGER_DEBUG;
+		}
 
-	// 	// the first parameter is the destination
-	// 	file_destination = (*iter); ++iter;
+		if (arg == "--name" && argc > i)
+		{
+			name = argv[i + 1];
+		}
 
-	// 	// the second parameter is the filename
-	// 	filename = (*iter);
-	// }
+		if (arg == "--file" && argc > i)
+		{
+			filename = argv[i + 1];
+			_stdout = false;
+		}
 
-    int rc;
-    //Manager manager;
-    
-    //Setup the sessions
-    ssh_session session1 = start_session("localhost", "moreira1", KEY_PATH, "2222");
-    // ssh_session session2 = start_session("localhost", "moreira2", KEY_PATH, "2223");
+		if (arg == "--timeout" && argc > i)
+		{
+			timeout = atoi(argv[i + 1]);
+		}
 
-    // Start the daemons
-    ssh_channel channel = ssh_channel_new(session1);
-    rc = ssh_channel_open_session(channel);
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error opening channel: %s\n", ssh_get_error(session1));
-        ssh_channel_free(channel);
-        ssh_disconnect(session1);
-        ssh_free(session1);
-        exit(EXIT_FAILURE);
-    }
+		if (arg == "--group" && argc > i)
+		{
+			group = std::string(argv[i + 1]);
+		}
 
-    rc = ssh_channel_request_exec(channel, "dtnd -i enp0s3");
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session1));
-        ssh_channel_free(channel);
-        ssh_disconnect(session1);
-        ssh_free(session1);
-        exit(EXIT_FAILURE);
-    }
+		if (arg == "--count" && argc > i) 
+		{
+			count = atoi(argv[i + 1]);
+		}
 
-    filename = "sendFile";
+		if (arg == "-U" && argc > i)
+		{
+			if (++i > argc)
+			{
+				std::cout << "argument missing!" << std::endl;
+				return -1;
+			}
 
-    // open file as read-only BLOB
-    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
+			unixdomain = ibrcommon::File(argv[i]);
+		}
+	}
 
-    //Split the file BLOB into smaller BLOBs
-    auto ref_chunks = splitBlob(ref,20);
+	if (loglevel > 0)
+	{
+		// add logging to the cerr
+		ibrcommon::Logger::addStream(std::cerr, loglevel, logopts);
+	}
 
-    const std::string localFilePath = "Sender/bundle.bin";
-    const std::string remoteFilePath = "ibrdtn/ibrdtn/tools/src/Sender/bundle.bin";
-    const std::string destinationFilePath = "ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin";
+	try {
+		// Create a stream to the server using TCP.
+		ibrcommon::clientsocket *sock = NULL;
 
+		// check if the unixdomain socket exists
+		if (unixdomain.exists())
+		{
+			// connect to the unix domain socket
+			sock = new ibrcommon::filesocket(unixdomain);
+		}
+		else
+		{
+			// connect to the standard local api port
+			ibrcommon::vaddress addr("localhost", 4550);
+			sock = new ibrcommon::tcpsocket(addr);
+		}
 
-    EID addr = EID("dtn://moreira-XPS-15-9570");
-    //generate bundle()
-    for(int i = 0; i < ref_chunks.size(); i++)
-    {
-        // create a bundle from the file
-        dtn::data::Bundle b;
+    	ibrcommon::socketstream conn(sock);
 
-        b.source = addr;
+		// Initiate a client for synchronous receiving
+		dtn::api::Client client(name, group, conn);
 
-        // set the destination
-        b.destination = file_destination;
+		// export objects for the signal handler
+		_conn = &conn;
+		_client = &client;
 
-        // add payload block with the references
-        b.push_back(ref_chunks[i]);
+		// Connect to the server. Actually, this function initiate the
+		// stream protocol by starting the thread and sending the contact header.
+		client.connect();
 
-        // set destination address to non-singleton
-        if (bundle_group) b.set(dtn::data::PrimaryBlock::DESTINATION_IS_SINGLETON, false);
+		std::fstream file;
 
-        // enable encryption if requested
-        if (bundle_encryption) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_ENCRYPT, true);
+		if (!_stdout)
+		{
+			std::cout << "Wait for incoming bundle... " << std::endl;
+			file.open(filename.c_str(), std::ios::in|std::ios::out|std::ios::binary|std::ios::trunc);
+			file.exceptions(std::ios::badbit | std::ios::eofbit);
+		}
 
-        // enable signature if requested
-        if (bundle_signed) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_SIGN, true);
+        EID addr = EID("dtn://moreira-XPS-15-9570");
 
-        // enable custody transfer if requested
-        if (bundle_custody) {
-            b.set(dtn::data::PrimaryBlock::CUSTODY_REQUESTED, true);
-            b.custodian = dtn::data::EID("api:me");
-        }
+		for(h = 0; h < count; ++h)
+		{
+			// receive the bundle
+			dtn::data::Bundle b = client.getBundle(timeout);
+            //b.source = addr;
 
-        // enable compression
-        if (bundle_compression) b.set(dtn::data::PrimaryBlock::IBRDTN_REQUEST_COMPRESSION, true);
+			// get the reference to the blob
+			ibrcommon::BLOB::Reference ref = b.find<dtn::data::PayloadBlock>().getBLOB();
 
-        // set the lifetime
-        b.lifetime = lifetime;
+            // Open the output file stream
+            std::ofstream outputFile("Receiver/bundle.bin", std::ios::binary);
 
-        // set the bundles priority
-        b.setPriority(dtn::data::PrimaryBlock::PRIORITY(priority));
+            // Create a DefaultSerializer object with the output stream
+            dtn::data::DefaultSerializer serializer(outputFile);
 
-        // Open the output file stream
-        std::ofstream outputFile(localFilePath, std::ios::binary);
+            // Serialize the bundle and write it to the file
+            serializer << b;
+            
+            // Close the output file stream
+            outputFile.close();
+		}
 
-        // Create a DefaultSerializer object with the output stream
-        dtn::data::DefaultSerializer serializer(outputFile);
+		if (!_stdout)
+		{
+			file.close();
+			std::cout << "done." << std::endl;
+		}
 
-        // Serialize the bundle and write it to the file
-        serializer << b;
-        
-        // Close the output file stream
-        outputFile.close();
-        
-        //send the bundle
-        sendBundle(session1,localFilePath,remoteFilePath, "dtn://moreira2-VirtualBox/dtnRecv",destinationFilePath);
-    }
+		// Shutdown the client connection.
+		client.close();
 
+		// close the tcp connection
+		conn.close();
+	} catch (const dtn::api::ConnectionTimeoutException&) {
+		std::cerr << "Timeout." << std::endl;
+		ret = EXIT_FAILURE;
+	} catch (const dtn::api::ConnectionAbortedException&) {
+		std::cerr << "Aborted." << std::endl;
+		ret = EXIT_FAILURE;
+	} catch (const dtn::api::ConnectionException&) {
+	} catch (const std::exception &ex) {
+		std::cerr << "Error: " << ex.what() << std::endl;
+		ret = EXIT_FAILURE;
+	}
 
-    // Close the channels and disconnect from the virtual machines
-    disconnect(channel);
-    ssh_disconnect(session1);
-    ssh_free(session1);
-    return 0;
+	return ret;
 }
-
-    /* To Do:
-    Create a bundle [Done]
-    Generate the bundle file [Done]
-    Send the bundle file to virtual machine 1 via ssh [Done]
-    Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend [Done]
-        Receive the bundle on virtual machine 2
-        Receive the bundle file via ssh on host2
-        Recreate the bundle [Done]
-    */
-
-
-// // Open the input file stream
-    // std::ifstream inputFile("bundle.bin", std::ios::binary);
-
-    // // Create a DefaultDeserializer object with the input stream
-    // dtn::data::DefaultDeserializer deserializer(inputFile);
-
-    // // Create a bundle object
-    // dtn::data::Bundle bundle;
-
-    // // Deserialize the bundle from the file
-    // deserializer >> bundle;
-
-    // // Close the input file stream
-    // inputFile.close();
-
-    // // get the reference to the blob
-    // ibrcommon::BLOB::Reference ref2 = bundle.find<dtn::data::PayloadBlock>().getBLOB();
-    // std::fstream file;
-    // // write the data to output
-    // bool _stdout = true;
-
-    // if (_stdout)
-    // {
-    //     std::cout << ref.iostream()->rdbuf() << std::flush;
-    // }
-    // else
-    // {
-    //     // write data to temporary file
-    //     try {
-    //         std::cout << "Bundle received." << std::endl;
-
-    //         file << ref.iostream()->rdbuf();
-    //     } catch (const std::ios_base::failure&) {
-
-    //     }
-    // }

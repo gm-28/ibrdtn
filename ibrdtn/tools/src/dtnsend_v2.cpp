@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
 {
 	bool error = false;
 	std::string file_destination = "dtn://local/filetransfer";
-	std::string file_source = "";
+	std::string file_source = "fileSource";
 	unsigned int lifetime = 3600;
 	bool use_stdin = false;
 	std::string filename;
@@ -306,8 +306,6 @@ int main(int argc, char *argv[])
 
 					// send the bundle
 					client << bundle;
-
-
 				}
 
 				// flush the buffers
