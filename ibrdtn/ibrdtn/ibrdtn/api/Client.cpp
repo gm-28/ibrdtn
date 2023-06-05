@@ -227,21 +227,5 @@ namespace dtn
 
 			throw ConnectionException();
 		}
-
-		void Client::remove(){
-
-			ibrcommon::vaddress address("localhost", 4550);
-
-			// connect to the standard local api port
-			ibrcommon::clientsocket *socket = new ibrcommon::tcpsocket(address);
-
-			ibrcommon::socketstream connection(socket);
-
-			connection << "protocol extended" << std::endl;
-			
-			connection << "bundle load queue" << std::endl;
-
-			connection << "bundle free" << std::endl;
-		}
 	}
 }
