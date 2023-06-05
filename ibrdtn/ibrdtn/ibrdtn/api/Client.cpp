@@ -233,9 +233,11 @@ namespace dtn
 			std::string buffer;
 
 			// switch to API tcpcl mode
-			_stream << "protocol management" << std::endl;
+			_stream << "protocol extended" << std::endl;
 			
-			_stream << "bundle remove" << std::endl;
+			_stream << "bundle load queue" << std::endl;
+
+			_stream << "bundle free" << std::endl;
 		}
 	}
 }

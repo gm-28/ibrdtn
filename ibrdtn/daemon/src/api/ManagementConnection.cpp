@@ -373,34 +373,6 @@ namespace dtn
 						dtn::core::BundleCore::getInstance().getStorage().clear();
 						_stream << ClientHandler::API_STATUS_OK << " STORAGE CLEARED" << std::endl;
 					}
-
-					else if (cmd[1] == "remove")
-					{
-						// get storage object
-						dtn::core::BundleCore &bcore = dtn::core::BundleCore::getInstance();
-						BundleFilter filter;
-
-						_stream << ClientHandler::API_STATUS_OK << " BUNDLE LIST" << std::endl;
-						dtn::storage::BundleResultList blist;
-
-						try {
-							bcore.getStorage().get(filter, blist);
-
-							for (std::list<dtn::data::MetaBundle>::const_iterator iter = blist.begin(); iter != blist.end(); ++iter)
-							{
-								const dtn::data::MetaBundle &b = *iter;
-								BundleID bundleID = static_cast<BundleID>(b);
-
-								_stream << "bundle: " << b.toString() << ";" << b.destination.getString() << "; Removed" << std::endl;
-
-								bcore.getStorage().remove(bundleID);
-								break;
-							}
-						} catch (const dtn::storage::NoBundleFoundException&) { }
-
-						// last line empty
-						_stream << std::endl;
-					}
 				}
 				else if (cmd[0] == "routing")
 				{

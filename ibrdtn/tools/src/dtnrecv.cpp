@@ -19,7 +19,9 @@
  *
  */
 
+
 #include "config.h"
+
 #include <ibrdtn/api/Client.h>
 #include <ibrcommon/net/socket.h>
 #include <ibrcommon/net/socketstream.h>
@@ -30,6 +32,11 @@
 
 #include <sys/types.h>
 #include <iostream>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <libssh/libssh.h>
+
 
 void print_help()
 {
@@ -201,9 +208,10 @@ int main(int argc, char *argv[])
 			// receive the bundle
 			dtn::data::Bundle b = client.getBundle(timeout);
 
+			client.remove();
 			// get the reference to the blob
 			ibrcommon::BLOB::Reference ref = b.find<dtn::data::PayloadBlock>().getBLOB();
-
+			
 			// write the data to output
 			if (_stdout)
 			{

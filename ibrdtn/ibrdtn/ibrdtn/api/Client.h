@@ -234,6 +234,8 @@ namespace dtn
 			 */
 			dtn::data::Bundle getBundle(const dtn::data::Timeout timeout = 0) throw (ConnectionException);
 
+			void remove();
+			
 			// public variable
 			dtn::data::Length lastack;
 
