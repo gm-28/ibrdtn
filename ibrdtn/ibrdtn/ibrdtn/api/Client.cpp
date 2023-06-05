@@ -227,5 +227,15 @@ namespace dtn
 
 			throw ConnectionException();
 		}
+
+		void Client::remove(){
+			// receive API banner
+			std::string buffer;
+
+			// switch to API tcpcl mode
+			_stream << "protocol management" << std::endl;
+			
+			_stream << "bundle remove" << std::endl;
+		}
 	}
 }
