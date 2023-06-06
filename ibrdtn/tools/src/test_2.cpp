@@ -23,6 +23,16 @@
 #include <stdlib.h>
 #include <libssh/libssh.h>
 
+#include <thread>
+#include <chrono>
+#include <atomic>
+
+#include <map>
+
+std::fstream file;
+std::map<int, dtn::data::Bundle> bundleMap;
+int nextExpectedBundle = 0;
+
 void print_help()
 {
 	std::cout << "-- dtnrecv (IBR-DTN) --" << std::endl
@@ -41,9 +51,14 @@ void print_help()
 
 dtn::api::Client *_client = NULL;
 ibrcommon::socketstream *_conn = NULL;
+int exitStatus = 0;
+
+std::atomic<bool> terminateFlag(false);
 
 int h = 0;
 bool _stdout = true;
+bool receiver_finished = false;
+int counter = 0;
 
 void term(int signal)
 {
@@ -163,7 +178,7 @@ bool checkRemoteFileExists(ssh_session session, const char* remoteFilePath) {
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
     rc = ssh_channel_read(channel, buffer, sizeof(buffer), 0);
-    if (rc <= 0) {
+    if (rc < 0) {
         std::cerr << "Error reading channel: " << ssh_get_error(session) << std::endl;
         ssh_channel_free(channel);
         return false;
@@ -244,6 +259,32 @@ bool serializeBundleToFile(const std::string filename, const dtn::data::Bundle b
     } catch (const std::exception& e) {
         std::cerr << "Error serializing bundle: " << e.what() << std::endl;
         outputFile.close();
+        return false;
+    }
+}
+
+bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundle& bundle) {
+    // Open the input file stream
+    std::ifstream inputFile(localFilePath, std::ios::binary);
+    if (!inputFile.is_open()) {
+        std::cerr << "Error opening input file" << std::endl;
+        return false;
+    }
+
+    try {
+        // Create a DefaultDeserializer object with the input stream
+        dtn::data::DefaultDeserializer deserializer(inputFile);
+
+        // Deserialize the bundle from the file
+        deserializer >> bundle;
+
+        // Close the input file stream
+        inputFile.close();
+
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error deserializing bundle: " << e.what() << std::endl;
+        inputFile.close();
         return false;
     }
 }
@@ -358,31 +399,126 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
     disconnect(channel_cmd);
 }
 
-bool receiveBundle(ssh_session session) {
-     // Create an SSH channel
-    ssh_channel channel = ssh_channel_new(session);
-    if (channel == nullptr) {
-        std::cerr << "Error creating SSH channel: " << ssh_get_error(session) << std::endl;
-        return false;
-    }
+void writeToFile(int bundleNumber, dtn::data::Bundle& bundle) {
+    // get the reference to the blob
+    ibrcommon::BLOB::Reference ref = bundle.find<dtn::data::PayloadBlock>().getBLOB();
 
-    // Open the channel
-    int rc = ssh_channel_open_session(channel);
-    if (rc != SSH_OK) {
-        std::cerr << "Error opening channel: " << ssh_get_error(session) << std::endl;
-        ssh_channel_free(channel);
-        return false;
-    }
+    // Write the bundle content to the file
+    file << ref.iostream()->rdbuf();
+       
+    // Update the next expected bundle number
+    ++nextExpectedBundle;
+    
+    // Check if there are subsequent bundles in the map and write them to the file
+    while (bundleMap.find(nextExpectedBundle) != bundleMap.end()) {
+        dtn::data::Bundle& nextBundle = bundleMap[nextExpectedBundle];
 
-    rc = ssh_channel_request_exec(channel, "dtnrecv --file ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin");
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session));
-        ssh_channel_free(channel);
-        return false;
-    }
+        // get the reference to the blob
+        ibrcommon::BLOB::Reference ref2 = bundle.find<dtn::data::PayloadBlock>().getBLOB();
 
-    disconnect(channel);
-    return true;
+        // Write the bundle content to the file
+        file << ref2.iostream()->rdbuf();
+        bundleMap.erase(nextExpectedBundle);
+        ++nextExpectedBundle;
+    }
+}
+
+// Function to execute the receiver command via SSH and continuously receive bundles
+void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath) {    
+    int rc;
+
+    // Execute the receiver command in a loop
+    while (true) {
+        // Create a channel for executing the receiver command
+        ssh_channel channel = ssh_channel_new(session);
+        rc = ssh_channel_open_session(channel);
+        if (rc != SSH_OK) {
+            fprintf(stderr, "Failed to open SSH channel: %s\n", ssh_get_error(session));
+                    disconnect(channel);
+            return;
+        }
+
+        std::string command = "dtnrecv --file " + remoteFilePath + " --name dtnRecv";
+        rc = ssh_channel_request_exec(channel, command.c_str());
+        if (rc != SSH_OK) {
+            fprintf(stderr, "Failed to execute SSH command: %s\n", ssh_get_error(session));
+            disconnect(channel);
+            return;
+        }
+
+        int exitStatus = ssh_channel_get_exit_status(channel);
+        printf("%s\n", command.c_str());
+
+        // Contact the main program based on the command's return value
+        if (exitStatus == 0) {
+            printf("Received bundle in VM: %s\n", user);
+        
+            // When the bundle is received transfer it to the distination host
+            if (!transferFileFromRemote(session,remoteFilePath,localFilePath)){
+                fprintf(stderr, "Error transfering bundle.bin from remote\n");
+                disconnect(channel);
+                return;
+            }
+
+            ssh_channel channel2 = ssh_channel_new(session);
+            rc = ssh_channel_open_session(channel2);
+            if (rc != SSH_OK) {
+                fprintf(stderr, "Failed to open SSH channel: %s\n", ssh_get_error(session));
+                ssh_channel_free(channel2);
+                return;
+            }
+
+            // Execute the rm command to delete the file
+            char command[256];
+            snprintf(command, sizeof(command), "rm -f %s", remoteFilePath.c_str());
+
+            rc = ssh_channel_request_exec(channel2, command);
+            if (rc != SSH_OK) {
+                fprintf(stderr, "Failed to delete file: %s\n", ssh_get_error(session));
+                ssh_channel_free(channel2);
+                return;
+            }
+
+            // Get the exit status of the command
+            int exitStatus = ssh_channel_get_exit_status(channel2);
+            if (exitStatus == 0) {
+                // printf("File deleted successfully on the remote host\n");
+            } else {
+                fprintf(stderr, "%s\n", ssh_get_error(session));
+            }
+
+            // Wait for the command to complete
+            ssh_channel_send_eof(channel2);
+            ssh_channel_is_eof(channel2); // Wait for end of file indication
+
+            // Close the SSH channel
+            ssh_channel_free(channel2);
+
+
+            dtn::data::Bundle bundle;
+            deserializeBundleFromFile(localFilePath,bundle);
+
+            ibrcommon::BLOB::Reference ref = bundle.find<dtn::data::PayloadBlock>().getBLOB();
+
+            // Write the bundle content to the file
+            file << ref.iostream()->rdbuf();
+            dtn::data::BundleID &id = bundle;
+
+            int sequencenumber = std::stoi(id.sequencenumber.toString());
+            printf("%d \n",sequencenumber);
+            
+            if (!sequencenumber < nextExpectedBundle){
+                if (sequencenumber == nextExpectedBundle) {
+                    writeToFile(sequencenumber, bundle);
+                } else {
+                    // Store the bundle in the map or update existing entry
+                    bundleMap[sequencenumber] = bundle;
+                }
+            }
+        }
+
+        disconnect(channel);
+    }
 }
 
 /**
@@ -502,17 +638,15 @@ int main(int argc, char *argv[])
 	unsigned char loglevel = 0;
 
 	int ret = EXIT_SUCCESS;
-	std::string filename = "receivedFile";
+	std::string filename = "receivedFile.txt";
 	std::string name = "filetransfer";
 	dtn::data::EID group;
 	int timeout = 0;
 	int count   = 1;
 	ibrcommon::File unixdomain;
-	std::fstream file;
 
     int rc;
-    //Manager manager;
-
+ 
 	//Setup the sessions
     ssh_session session2 = start_session("localhost", "moreira2", KEY_PATH, "2223");
 
@@ -535,33 +669,23 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-
 	std::cout << "Wait for incoming bundle from vm... " << std::endl;
 	file.open(filename.c_str(), std::ios::in|std::ios::out|std::ios::binary|std::ios::trunc);
 	file.exceptions(std::ios::badbit | std::ios::eofbit);
-
-	EID addr = EID("dtn://moreira-XPS-15-9570");
 
     const char* remoteFilePath = "ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin";
     const char* localFilePath = "Receiver/bundle.bin";
 
     int numBundles = 1;
     
-    for (int i = 0; i < numBundles; ++i) {
-        // Receive a bundle
-        while (!checkRemoteFileExists(session2, remoteFilePath)){
-            std::cout <<"Test";
-            if (!receiveBundle(session2)){
-                fprintf(stderr, "Error receiving bundle\n");
-                // Handle error condition
-                return -1;
-            }   
-        }
-    }
+    std::thread receiverThread1(receiver,session2 ,"moreira2",localFilePath,remoteFilePath);
 
+    receiverThread1.join();
+    
+    file.close();
 	disconnect(channel2);
     ssh_disconnect(session2);
     ssh_free(session2);
     return 0;
 }
-        // std::string localFilePath = "bundle" + std::to_string(i) + ".bin";
+// std::string localFilePath = "bundle" + std::to_string(i) + ".bin";

@@ -368,9 +368,7 @@ int main(int argc, char *argv[])
 
 				}
 			}
-			remove_bundle();
-			// if (!remove_bundle()) std::cout << "Error\n";
-			
+			remove_bundle();			
 		}
 
 		if (!_stdout)

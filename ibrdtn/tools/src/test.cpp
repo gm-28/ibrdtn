@@ -129,14 +129,14 @@ bool transferFileToRemote(ssh_session session, const std::string& localFilePath,
     return true;
 }
 
-void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination,const std::string destinationFilePath) {
+void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination) {
     bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath);
     if (!transferSuccess) {
         std::cerr << "Error transferring file: " << localFilePath << std::endl;
         return;
     }
 
-    std::string command = "dtnsend " + destination + " " + destinationFilePath;
+    std::string command = "dtnsend " + destination + " " + remoteFilePath;
     std::cout << command.c_str();
     std::cout << "\n";
 
@@ -166,6 +166,7 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
 
     disconnect(channel_cmd);
 }
+
 /**
  * Splits aa BLOB into smaller chunks of a given size and returns a vector of BLOB references.
  * 
@@ -275,10 +276,59 @@ static ssh_session start_session(const char* host, const char* user, const char*
     return session;
 }
 
-int main(){
-    std::string file_destination = "dtn://moreira2-VirtualBox/dtnRecv";
-    std::string file_source = "fileSource";
+int main()
+{
+    int rc;
+    //Manager manager;
+    
+    //Setup the sessions
+    ssh_session session1 = start_session("localhost", "moreira1", KEY_PATH, "2222");
+    ssh_session session2 = start_session("localhost", "moreira2", KEY_PATH, "2223");
 
+    // Start the daemons
+    ssh_channel channel = ssh_channel_new(session1);
+    rc = ssh_channel_open_session(channel);
+    if (rc != SSH_OK) {
+        fprintf(stderr, "Error opening channel: %s\n", ssh_get_error(session1));
+        ssh_channel_free(channel);
+        ssh_disconnect(session1);
+        ssh_free(session1);
+        exit(EXIT_FAILURE);
+    }
+
+    rc = ssh_channel_request_exec(channel, "dtnd -i enp0s3");
+    if (rc != SSH_OK) {
+        fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session1));
+        ssh_channel_free(channel);
+        ssh_disconnect(session1);
+        ssh_free(session1);
+        exit(EXIT_FAILURE);
+    }
+
+    sleep(1);
+    // ssh_channel channel2 = ssh_channel_new(session2);
+    // rc = ssh_channel_open_session(channel2);
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error opening channel for the second virtual machine: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
+
+    // rc = ssh_channel_request_exec(channel2, "dtnd -i enp0s3");
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error executing command on the second virtual machine: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
+
+    std::string file_destination1 = "dtn://moreira2-VirtualBox/dtnRecv";
+    std::string file_destination2 = "dtn://moreira1-VirtualBox/dtnRecv";
+
+    std::string file_source = "fileSource";
 	unsigned int lifetime = 3600;
 	bool use_stdin = false;
 	std::string filename;
@@ -294,7 +344,6 @@ int main(){
 
    	std::list<std::string> arglist;
 
-    
     // if (arglist.size() <= 1)
 	// {
 	// 	return -1;
@@ -318,45 +367,13 @@ int main(){
 	// 	filename = (*iter);
 	// }
 
-    int rc;
-    //Manager manager;
-    
-    //Setup the sessions
-    ssh_session session1 = start_session("localhost", "moreira1", KEY_PATH, "2222");
-    // ssh_session session2 = start_session("localhost", "moreira2", KEY_PATH, "2223");
-
-    // Start the daemons
-    ssh_channel channel = ssh_channel_new(session1);
-    rc = ssh_channel_open_session(channel);
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error opening channel: %s\n", ssh_get_error(session1));
-        ssh_channel_free(channel);
-        ssh_disconnect(session1);
-        ssh_free(session1);
-        exit(EXIT_FAILURE);
-    }
-
-    rc = ssh_channel_request_exec(channel, "dtnd -i enp0s3");
-    if (rc != SSH_OK) {
-        fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session1));
-        ssh_channel_free(channel);
-        ssh_disconnect(session1);
-        ssh_free(session1);
-        exit(EXIT_FAILURE);
-    }
-
     filename = "sendFile";
 
     // open file as read-only BLOB
     ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
 
     //Split the file BLOB into smaller BLOBs
-    auto ref_chunks = splitBlob(ref,20);
-
-    const std::string localFilePath = "Sender/bundle.bin";
-    const std::string remoteFilePath = "ibrdtn/ibrdtn/tools/src/Sender/bundle.bin";
-    const std::string destinationFilePath = "ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin";
-
+    auto ref_chunks = splitBlob(ref,5);
 
     EID addr = EID("dtn://moreira-XPS-15-9570");
     //generate bundle()
@@ -367,8 +384,7 @@ int main(){
 
         b.source = addr;
 
-        // set the destination
-        b.destination = file_destination;
+        b.destination = addr;
 
         // add payload block with the references
         b.push_back(ref_chunks[i]);
@@ -398,7 +414,7 @@ int main(){
         b.setPriority(dtn::data::PrimaryBlock::PRIORITY(priority));
 
         // Open the output file stream
-        std::ofstream outputFile(localFilePath, std::ios::binary);
+        std::ofstream outputFile("Sender/bundle.bin", std::ios::binary);
 
         // Create a DefaultSerializer object with the output stream
         dtn::data::DefaultSerializer serializer(outputFile);
@@ -410,29 +426,47 @@ int main(){
         outputFile.close();
         
         //send the bundle
-        sendBundle(session1,localFilePath,remoteFilePath, "dtn://moreira2-VirtualBox/dtnRecv",destinationFilePath);
+
+        const std::string localFilePath = "Sender/bundle.bin";
+        const std::string remoteFilePath = "ibrdtn/ibrdtn/tools/src/Sender/bundle.bin";
+        
+        sendBundle(session1,localFilePath,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv");
+
+        // if(i < 2){
+        //     sendBundle(session1,localFilePath,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv");
+        // }else{
+        //     sendBundle(session2,localFilePath,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv");
+        // }
     }
+    // ssh_channel channel2_cmd = ssh_channel_new(session2);
+    // rc = ssh_channel_open_session(channel2_cmd);
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error opening channel for the second virtual machine: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2_cmd);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
 
 
-    // Close the channels and disconnect from the virtual machines
-    disconnect(channel);
-    ssh_disconnect(session1);
-    ssh_free(session1);
-    return 0;
-}
+    // rc = ssh_channel_request_exec(channel2_cmd, "dtnping dtn://moreira1-VirtualBox/echo");
+    // if (rc != SSH_OK) {
+    //     fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
+    //     ssh_channel_free(channel2_cmd);
+    //     ssh_disconnect(session2);
+    //     ssh_free(session2);
+    //     exit(EXIT_FAILURE);
+    // }
 
-    /* To Do:
-    Create a bundle [Done]
-    Generate the bundle file [Done]
-    Send the bundle file to virtual machine 1 via ssh [Done]
-    Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend [Done]
-        Receive the bundle on virtual machine 2
-        Receive the bundle file via ssh on host2
-        Recreate the bundle [Done]
-    */
+    // c =0;
+    // // Read and print the command output
+    // while ((nbytes = ssh_channel_read(channel2_cmd, buffer2, sizeof(buffer2), 0)) > 0) {
+    //     fwrite(buffer2, 1, nbytes, stdout);
+    //     c++;
+    //     if(c == 5) break;
+    // }
 
-
-// // Open the input file stream
+    // // Open the input file stream
     // std::ifstream inputFile("bundle.bin", std::ios::binary);
 
     // // Create a DefaultDeserializer object with the input stream
@@ -468,3 +502,25 @@ int main(){
 
     //     }
     // }
+
+    // Close the channels and disconnect from the virtual machines
+    // disconnect(channel2_cmd, channel2, session2);
+    // disconnect(channel);
+    // disconnect(channel2);
+    ssh_disconnect(session1);
+    ssh_free(session1);
+    // ssh_disconnect(session2);
+    // ssh_free(session2);
+    return 0;
+}
+
+    /* To Do:
+    Create a bundle [Done]
+    Generate the bundle file [Done]
+    Send the bundle file to virtual machine 1 via ssh [Done]
+        Send the bundle with dtnsend to the neighbor to do this request the exectuion of command dtnsend
+        Receive the bundle on virtual machine 2
+    Generate the bundle from the file [Done]
+        Send the bundle file to host via ssh
+    Recreate the bundle [Done]
+    */
