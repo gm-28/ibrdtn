@@ -112,90 +112,6 @@ bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundl
     }
 }
 
-int remove_bundle() {
-    int sockfd;
-    struct sockaddr_in serverAddr;
-    struct hostent* host;
-
-    /* Create a socket */
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Get the host by name */
-    if ((host = gethostbyname("localhost")) == NULL) {
-        perror("gethostbyname failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Set up server information */
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(4550);
-    memcpy(&serverAddr.sin_addr, host->h_addr, host->h_length);
-
-    /* Connect to the daemon */
-    if (connect(sockfd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("connection failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Read header */
-    char header[256];
-    if (read(sockfd, header, sizeof(header)) < 0) {
-        perror("read header failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Switch to extended protocol mode */
-    const char* protocolSwitch = "protocol extended\n";
-    if (write(sockfd, protocolSwitch, strlen(protocolSwitch)) < 0) {
-        perror("write protocol switch failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Read protocol switch */
-    char protocolResponse[256];
-    if (read(sockfd, protocolResponse, sizeof(protocolResponse)) < 0) {
-        perror("read protocol response failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Add registration */
-    const char* addRegistration = "registration add dtn://moreira2-VirtualBox/dtnRecv\n";
-    if (write(sockfd, addRegistration, strlen(addRegistration)) < 0) {
-        perror("write add registration failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Load bundle queue */
-    const char* loadQueue = "bundle load queue\n";
-    if (write(sockfd, loadQueue, strlen(loadQueue)) < 0) {
-        perror("write load queue failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Free bundle */
-    const char* freeBundle = "bundle free\n";
-    if (write(sockfd, freeBundle, strlen(freeBundle)) < 0) {
-        perror("write free bundle failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Delete registration */
-    const char* deleteRegistration = "registration del dtn://moreira2-VirtualBox/dtnRecv\n";
-    if (write(sockfd, deleteRegistration, strlen(deleteRegistration)) < 0) {
-        perror("write delete registration failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Close the socket */
-    close(sockfd);
-
-    return 0;
-}
-
 int main(int argc, char *argv[])
 {
 	// logging options
@@ -329,11 +245,6 @@ int main(int argc, char *argv[])
 
 			// get the reference to the blob
 			ibrcommon::BLOB::Reference ref = b.find<dtn::data::PayloadBlock>().getBLOB();
-			
-			dtn::data::Bundle b1;
-			deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
-			dtn::data::BundleID& id = b1;
-			std::cout << "Sequence of transfered file " + std::stoi(id.sequencenumber.toString().c_str());
 
 			// write the data to output
 			if (_stdout)
@@ -359,10 +270,21 @@ int main(int argc, char *argv[])
 			std::cout << "done." << std::endl;
 		}
 
+		dtn::data::Bundle b1;
+		deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
+		dtn::data::BundleID& id = b1;
+		int sequence = std::stoi(id.sequencenumber.toString().c_str());
+		std::cout << "Sequence of transferred file " << std::stoi(id.sequencenumber.toString()) << "\n";
+
 		// Shutdown the client connection.
 		client.close();
 
-		remove_bundle();
+		int result = system("python3 ibrdtn/ibrdtn/tools/src/removebundle.py");
+ 		if (result == 0){
+			std::cout << "Bundle freed successfully!"<< std::endl;
+		}else{
+			std::cout << "Bundle freed unsuccessfully!"<< std::endl;	
+		}
 		// close the tcp connection
 		conn.close();
 	} catch (const dtn::api::ConnectionTimeoutException&) {
