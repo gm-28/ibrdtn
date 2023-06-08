@@ -86,6 +86,32 @@ void term(int signal)
 	}
 }
 
+bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundle& bundle) {
+    // Open the input file stream
+    std::ifstream inputFile(localFilePath, std::ios::binary);
+    if (!inputFile.is_open()) {
+        std::cerr << "Error opening input file" << std::endl;
+        return false;
+    }
+
+    try {
+        // Create a DefaultDeserializer object with the input stream
+        dtn::data::DefaultDeserializer deserializer(inputFile);
+
+        // Deserialize the bundle from the file
+        deserializer >> bundle;
+
+        // Close the input file stream
+        inputFile.close();
+
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Error serializing bundle: " << e.what() << std::endl;
+        inputFile.close();
+        return false;
+    }
+}
+
 int remove_bundle() {
     int sockfd;
     struct sockaddr_in serverAddr;
@@ -352,6 +378,11 @@ int main(int argc, char *argv[])
 			// get the reference to the blob
 			ibrcommon::BLOB::Reference ref = b.find<dtn::data::PayloadBlock>().getBLOB();
 			
+			dtn::data::Bundle b1;
+			deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
+			dtn::data::BundleID& id = b1;
+			printf("Sequence of transfered file %d in %s \n",std::stoi(id.sequencenumber.toString().c_str()));
+
 			// write the data to output
 			if (_stdout)
 			{
@@ -367,8 +398,7 @@ int main(int argc, char *argv[])
 				} catch (const std::ios_base::failure&) {
 
 				}
-			}
-			remove_bundle();			
+			}	
 		}
 
 		if (!_stdout)
@@ -393,6 +423,7 @@ int main(int argc, char *argv[])
 		std::cerr << "Error: " << ex.what() << std::endl;
 		ret = EXIT_FAILURE;
 	}
-
+	
+	remove_bundle();		
 	return ret;
 }
