@@ -169,35 +169,11 @@ int remove_bundle() {
         exit(EXIT_FAILURE);
     }
 
-    /* Read add registration response */
-    char addRegistrationResponse[256];
-    if (read(sockfd, addRegistrationResponse, sizeof(addRegistrationResponse)) < 0) {
-        perror("read add registration response failed");
-        exit(EXIT_FAILURE);
-    }
-    if (strstr(addRegistrationResponse, "200") != NULL) {
-        std::cout << "Registration added successfully.\n";
-    } else {
-        std::cout << "Failed to add registration.\n";
-    }
-
     /* Load bundle queue */
     const char* loadQueue = "bundle load queue\n";
     if (write(sockfd, loadQueue, strlen(loadQueue)) < 0) {
         perror("write load queue failed");
         exit(EXIT_FAILURE);
-    }
-
-    /* Read load queue response */
-    char loadQueueResponse[256];
-    if (read(sockfd, loadQueueResponse, sizeof(loadQueueResponse)) < 0) {
-        perror("read load queue response failed");
-        exit(EXIT_FAILURE);
-    }
-    if (strstr(loadQueueResponse, "200") != NULL) {
-        std::cout << "Bundle queue loaded successfully.\n";
-    } else {
-        std::cout << "Failed to load bundle queue.\n";
     }
 
     /* Free bundle */
@@ -207,35 +183,11 @@ int remove_bundle() {
         exit(EXIT_FAILURE);
     }
 
-    /* Read free bundle response */
-    char freeBundleResponse[256];
-    if (read(sockfd, freeBundleResponse, sizeof(freeBundleResponse)) < 0) {
-        perror("read free bundle response failed");
-        exit(EXIT_FAILURE);
-    }
-    if (strstr(freeBundleResponse, "200") != NULL) {
-        std::cout << "Bundle freed successfully.\n";
-    } else {
-        std::cout << "Failed to free bundle.\n";
-    }
-
     /* Delete registration */
     const char* deleteRegistration = "registration del dtn://moreira2-VirtualBox/dtnRecv\n";
     if (write(sockfd, deleteRegistration, strlen(deleteRegistration)) < 0) {
         perror("write delete registration failed");
         exit(EXIT_FAILURE);
-    }
-
-    /* Read delete registration response */
-    char deleteRegistrationResponse[256];
-    if (read(sockfd, deleteRegistrationResponse, sizeof(deleteRegistrationResponse)) < 0) {
-        perror("read delete registration response failed");
-        exit(EXIT_FAILURE);
-    }
-    if (strstr(deleteRegistrationResponse, "200") != NULL) {
-        std::cout << "Registration deleted successfully.\n";
-    } else {
-        std::cout << "Failed to delete registration.\n";
     }
 
     /* Close the socket */
@@ -381,7 +333,7 @@ int main(int argc, char *argv[])
 			dtn::data::Bundle b1;
 			deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
 			dtn::data::BundleID& id = b1;
-			printf("Sequence of transfered file %d in %s \n",std::stoi(id.sequencenumber.toString().c_str()));
+			std::cout << "Sequence of transfered file " + std::stoi(id.sequencenumber.toString().c_str());
 
 			// write the data to output
 			if (_stdout)
@@ -410,6 +362,7 @@ int main(int argc, char *argv[])
 		// Shutdown the client connection.
 		client.close();
 
+		remove_bundle();
 		// close the tcp connection
 		conn.close();
 	} catch (const dtn::api::ConnectionTimeoutException&) {
@@ -422,8 +375,6 @@ int main(int argc, char *argv[])
 	} catch (const std::exception &ex) {
 		std::cerr << "Error: " << ex.what() << std::endl;
 		ret = EXIT_FAILURE;
-	}
-	
-	remove_bundle();		
+	}		
 	return ret;
 }
