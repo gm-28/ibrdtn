@@ -286,8 +286,9 @@ int main(int argc, char *argv[])
 		// Shutdown the client connection.
 		client.close();
 
-		int result = system("python3 ibrdtn/ibrdtn/tools/src/removebundle.py");
- 		if (result == 0){
+    	std::string command = "python3 ibrdtn/ibrdtn/tools/src/removebundle.py " + timestamp + " " + sequencenumber + " " + sourceeid;
+    	int result = system(command.c_str()); 		
+		if (result == 0){
 			std::cout << "Bundle freed successfully!"<< std::endl;
 		}else{
 			std::cout << "Bundle freed unsuccessfully!"<< std::endl;	
