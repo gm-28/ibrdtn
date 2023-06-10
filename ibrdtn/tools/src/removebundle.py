@@ -38,24 +38,12 @@ fsock.readline()
 ''' Add registration '''
 sock.send(b"registration add dtn://moreira1-VirtualBox/dtnRecv\n")
 
-data = fsock.read(3)
-sys.stdout.write(data)
-
 ''' Load bundle based on timestamp, sequence number, and source EID '''
 load_command = "bundle load {} {} {}\n".format(timestamp, seq_nr, source_eid)
 sock.send(load_command.encode())
 
-data = fsock.readline()
-sys.stdout.write(data)
-data = fsock.readline()
-
 ''' Free bundle from queue '''
 sock.send(b"bundle free\n")
-
-data = fsock.readline()
-sys.stdout.write(data)
-data = fsock.readline()
-sys.stdout.write(data)
 
 ''' Close the socket '''
 sock.close()
