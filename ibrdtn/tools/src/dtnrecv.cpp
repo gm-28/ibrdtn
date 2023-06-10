@@ -199,6 +199,10 @@ int main(int argc, char *argv[])
 		ibrcommon::Logger::addStream(std::cerr, loglevel, logopts);
 	}
 
+	std::string sequencenumber;
+	std::string timestamp;
+	std::string sourceeid;
+
 	try {
 		// Create a stream to the server using TCP.
 		ibrcommon::clientsocket *sock = NULL;
@@ -243,6 +247,9 @@ int main(int argc, char *argv[])
 			// receive the bundle
 			dtn::data::Bundle b = client.getBundle(timeout);
 
+			timestamp = b.timestamp.toString().c_str();
+			sequencenumber = b.sequencenumber.toString().c_str();
+			sourceeid = b.source.getString().c_str();
 			// get the reference to the blob
 			ibrcommon::BLOB::Reference ref = b.find<dtn::data::PayloadBlock>().getBLOB();
 
@@ -274,7 +281,7 @@ int main(int argc, char *argv[])
 		deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
 		dtn::data::BundleID& id = b1;
 		int sequence = std::stoi(id.sequencenumber.toString().c_str());
-		std::cout << "Sequence of transferred file " << std::stoi(id.sequencenumber.toString()) << "\n";
+		std::cout << "Sequence of transferred file " << sequencenumber << " Timestamp " << timestamp << " Source " << sourceeid << "\n";
 
 		// Shutdown the client connection.
 		client.close();
