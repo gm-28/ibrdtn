@@ -56,11 +56,13 @@ int exitStatus = 0;
 
 std::atomic<bool> terminateFlag(false);
 std::mutex bundleMapMutex;
+std::mutex stopMutex;
 
 int h = 0;
 bool _stdout = true;
 bool receiver_finished = false;
 int counter = 0;
+int lastsequencenumber = -1;
 
 void term(int signal)
 {
@@ -174,11 +176,6 @@ bool transferFileFromRemote(ssh_session session, const std::string& remoteFilePa
     localFile.close();
     sftp_close(remoteFile);
     sftp_free(sftp);
-    dtn::data::Bundle b1;
-    deserializeBundleFromFile(localFilePath,b1);
-    dtn::data::BundleID& id = b1;
-    printf("Sequence of transfered file %d in %s \n",std::stoi(id.sequencenumber.toString().c_str()),user);
-
     return true;
 }
 
@@ -405,18 +402,10 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
     disconnect(channel_cmd);
 }
 
-bool brake = false;
 void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
     // get the reference to the blob
     ibrcommon::BLOB::Reference ref = bundle.find<dtn::data::PayloadBlock>().getBLOB();
-    printf("Writing bundle[%d] from VM: %s | size %zu \n ",std::stoi(bundle.sequencenumber.toString()), user,bundle.getPayloadLength());
     
-    int t = std::stoi(bundle.sequencenumber.toString().c_str());
-    if(t == 140) {
-        printf("break = true");
-        brake=true;
-    }
-
     // Write the bundle content to the file
     {
         std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
@@ -424,13 +413,22 @@ void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
         ++nextExpectedBundle;
     } // The lock is automatically released when lock goes out of scope
 
+
+    if(bundle.sequencenumber == lastsequencenumber){
+        // Set the terminateFlag to stop the worker thread
+        {
+            std::lock_guard<std::mutex> lock(stopMutex);
+            terminateFlag = true;
+        }
+        return;
+    }
+
     // Check if there are subsequent bundles in the map and write them to the file
     while (true) {
         std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
         auto it = bundleMap.find(nextExpectedBundle);
         if (it != bundleMap.end()) {
             dtn::data::Bundle& nextBundle = it->second;
-            printf("Subsequent writing  bundle[%d] from VM: %s | size %zu \n ",std::stoi(nextBundle.sequencenumber.toString()), user,nextBundle.getPayloadLength());
 
             // get the reference to the blob
             ibrcommon::BLOB::Reference ref2 = nextBundle.find<dtn::data::PayloadBlock>().getBLOB();
@@ -439,11 +437,13 @@ void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
             file << ref2.iostream()->rdbuf();
             bundleMap.erase(it);
             ++nextExpectedBundle;
-            int t1 = std::stoi(nextBundle.sequencenumber.toString().c_str());
-            if(t1 == 140) 
-            {
-                printf("break = true");
-                brake=true;
+
+            if(nextBundle.sequencenumber == lastsequencenumber){
+                // Set the terminateFlag to stop the worker thread
+                {
+                    std::lock_guard<std::mutex> lock(stopMutex);
+                    terminateFlag = true;
+                }
             }
         } else {
             break;
@@ -451,22 +451,16 @@ void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
     }
 }
 
-void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath, int numBundles) {    
+void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath) {    
     int rc;
 
-    int count = 0;
     // Execute the receiver command in a loop
-    while (true) {
-        if(brake){
-            printf("brake\n");
-            break;
-        }
-
+    while (!terminateFlag) {
         // Create a channel for executing the receiver command
         ssh_channel channel = ssh_channel_new(session);
         rc = ssh_channel_open_session(channel);
         if (rc != SSH_OK) {
-            fprintf(stderr, "Failed to open SSH channel: %s\n", ssh_get_error(session));
+            fprintf(stderr, "Failed to open SSH channel 1: %s\n", ssh_get_error(session));
             disconnect(channel);
             return;
         }
@@ -478,13 +472,17 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             disconnect(channel);
             return;
         }
-        char buffer[1024];  // Define buffer with a size of 1024 bytes
-        while ((rc = channel_read(channel, buffer, sizeof(buffer), 0)) > 0) {
-            if (fwrite(buffer, 1, rc, stdout) != (unsigned int) rc) {
-                return;
-            }
+
+        ssh_channel_set_blocking(channel,0);
+
+        int exitStatus = ssh_channel_get_exit_status(channel);
+        while (exitStatus == -1){
+            exitStatus = ssh_channel_get_exit_status(channel);
+            if(terminateFlag) break;
         }
-        // Contact the main program based on the command's return value
+        ssh_channel_set_blocking(channel,1);
+
+
         if (exitStatus == 0) {
             // When the bundle is received, transfer it to the destination host
             if (!transferFileFromRemote(session, remoteFilePath, localFilePath,user)) {
@@ -496,7 +494,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             ssh_channel channel2 = ssh_channel_new(session);
             rc = ssh_channel_open_session(channel2);
             if (rc != SSH_OK) {
-                fprintf(stderr, "Failed to open SSH channel: %s\n", ssh_get_error(session));
+                fprintf(stderr, "Failed to open SSH channel 2: %s\n", ssh_get_error(session));
                 ssh_channel_free(channel2);
                 return;
             }
@@ -513,8 +511,8 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             }
 
             // Get the exit status of the command
-            int exitStatus = ssh_channel_get_exit_status(channel2);
-            if (exitStatus == 0) {
+            int exitStatus2 = ssh_channel_get_exit_status(channel2);
+            if (exitStatus2 == 0) {
                 // printf("File deleted successfully on the remote host\n");
             } else {
                 fprintf(stderr, "%s\n", ssh_get_error(session));
@@ -533,8 +531,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
 
             dtn::data::BundleID& id = bundle;
 
-            int sequencenumber = std::stoi(id.sequencenumber.toString());            
-
+            int sequencenumber = std::stoi(id.sequencenumber.toString());
             if (sequencenumber == nextExpectedBundle) {
                 writeToFile(sequencenumber, bundle,user);
             } else {
@@ -544,10 +541,14 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
                     bundleMap[sequencenumber] = bundle;
                 } // The lock is automatically released when lock goes out of scope
             }
-            count++;
+            if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE)){
+                lastsequencenumber = sequencenumber;
+            }
         }
         disconnect(channel);
     }
+
+    return;
 }
 
 /**
@@ -718,7 +719,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-	std::cout << "Wait for incoming bundle from vm... " << std::endl;
+	std::cout << "Wait for incoming file..." << std::endl;
 	file.open(filename.c_str(), std::ios::in|std::ios::out|std::ios::binary|std::ios::trunc);
 	file.exceptions(std::ios::badbit | std::ios::eofbit);
 
@@ -726,10 +727,8 @@ int main(int argc, char *argv[])
     const char* localFilePath1 = "Receiver/bundle1.bin";
     const char* localFilePath2 = "Receiver/bundle2.bin";
 
-    int numBundles2 = 1000;
-    int numBundles1 = 1000;
-    std::thread receiverThread2(receiver,session2 ,"moreira2",localFilePath2,remoteFilePath,numBundles2);
-    std::thread receiverThread1(receiver,session1 ,"moreira1",localFilePath1,remoteFilePath,numBundles1);
+    std::thread receiverThread2(receiver,session2 ,"moreira2",localFilePath2,remoteFilePath);
+    std::thread receiverThread1(receiver,session1 ,"moreira1",localFilePath1,remoteFilePath);
 
     receiverThread2.join();
     receiverThread1.join();
@@ -741,6 +740,7 @@ int main(int argc, char *argv[])
     disconnect(channel1);
     ssh_disconnect(session1);
     ssh_free(session1);
+
+    std::cout << filename <<" has been received!" << std::endl;
     return 0;
 }
-// std::string localFilePath = "bundle" + std::to_string(i) + ".bin";

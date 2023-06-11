@@ -8,7 +8,6 @@
 #include <fcntl.h>
 
 #include "config.h"
-// #include "manager.h"
 #include <ibrdtn/api/Client.h>
 #include <ibrcommon/net/socket.h>
 #include <ibrcommon/thread/Mutex.h>
@@ -157,7 +156,6 @@ bool transferFileToRemote(ssh_session session, const std::string& localFilePath,
     dtn::data::Bundle b1;
     deserializeBundleFromFile(localFilePath,b1);
     dtn::data::BundleID& id = b1;
-    printf("Sequence of transfered file %d in %s \n",std::stoi(id.sequencenumber.toString().c_str()),user);
 
     return true;
 }
@@ -402,6 +400,7 @@ int main()
 	// }
 
     filename = "pinguim-linux-tux.jpg";
+    std::cout << filename <<" is being sent" << std::endl;
 
     // open file as read-only BLOB
     ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
@@ -409,7 +408,6 @@ int main()
     //Split the file BLOB into smaller BLOBs
     auto ref_chunks = splitBlob(ref,1000);
 
-    printf("Number of blobs %d\n",ref_chunks.size());
     EID addr = EID("dtn://moreira-XPS-15-9570");
     //generate bundle()
     for(int i = 0; i < ref_chunks.size(); i++)
@@ -447,9 +445,11 @@ int main()
 
         // set the bundles priority
         b.setPriority(dtn::data::PrimaryBlock::PRIORITY(priority));
-
-  
         
+        if(i == (ref_chunks.size() - 1)){
+            b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true);  
+        }
+
         dtn::data::BundleID& id = b;
         int timestamp = std::stoi(id.timestamp.toString().c_str());
 
@@ -480,7 +480,6 @@ int main()
             // Close the output file stream
             outputFile.close();
 
-            printf("Send bundle[%d] to VM: moreira2 \n",std::stoi(id.sequencenumber.toString()));
             sendBundle(session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1");
         }else{
             // Open the output file stream
@@ -494,7 +493,6 @@ int main()
             // Close the output file stream
             outputFile.close();
             
-            printf("Send bundle[%d] to VM: moreira1 \n",stoi(b.sequencenumber.toString()));
             sendBundle(session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2");
         }
     }
@@ -507,5 +505,7 @@ int main()
     ssh_free(session1);
     ssh_disconnect(session2);
     ssh_free(session2);
+    std::cout << filename <<" has been sent" << std::endl;
+
     return 0;
 }
