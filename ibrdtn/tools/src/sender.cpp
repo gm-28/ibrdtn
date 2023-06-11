@@ -19,10 +19,122 @@
 #include "ibrdtn/data/Bundle.h"
 #include <vector>
 #include <random>
-
+#include <regex>
 
 using namespace std;
 std::vector<ibrcommon::BLOB::Reference> blob_vec;
+
+struct WirelessInfo {
+    std::string signalLevel;
+    std::string noiseLevel;
+    std::string bitRate;
+    double snr;
+};
+
+// Function to trim whitespace from the beginning and end of a string
+std::string trim(const std::string& str) {
+    std::string trimmed = str;
+    // Remove leading whitespace
+    trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(),
+        [](int ch) { return !std::isspace(ch); }));
+    // Remove trailing whitespace
+    trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(),
+        [](int ch) { return !std::isspace(ch); }).base(), trimmed.end());
+    return trimmed;
+}
+
+std::string getNoiseLevel(int frequency) {
+    std::ostringstream command;
+    command << "iw dev wlp59s0 survey dump";
+
+    std::string result;
+    char buffer[128];
+    FILE* stream = popen(command.str().c_str(), "r");
+    if (stream) {
+        while (fgets(buffer, sizeof(buffer), stream) != nullptr) {
+            result += buffer;
+        }
+        pclose(stream);
+    } else {
+        std::cerr << "Error executing command." << std::endl;
+        return "";
+    }
+
+    std::istringstream iss(result);
+    std::string line;
+    std::string noiseLevel;
+    bool foundFrequency = false;
+    while (std::getline(iss, line)) {
+        if (line.find("frequency:\t\t") != std::string::npos) {
+            std::string freq = line.substr(line.find(":") + 1);
+            if (std::stoi(freq) == frequency) {
+                foundFrequency = true;
+            }
+        }
+        if (foundFrequency && line.find("noise:\t\t\t") != std::string::npos) {
+            noiseLevel = line.substr(line.find(":") + 1);
+            noiseLevel = trim(noiseLevel);
+            break;
+        }
+    }
+
+    if (noiseLevel.empty()) {
+        std::cerr << "No noise level data found for frequency " << frequency << " MHz." << std::endl;
+        return "";
+    }
+
+    return noiseLevel;
+}
+
+WirelessInfo getWirelessInfo(const std::string& interface, int channel) {
+    std::ostringstream command;
+    command << "iwconfig " << interface;
+    
+    std::string result;
+    char buffer[128];
+    FILE* stream = popen(command.str().c_str(), "r");
+    if (stream) {
+        while (fgets(buffer, sizeof(buffer), stream) != nullptr) {
+            result += buffer;
+        }
+        pclose(stream);
+    } else {
+        std::cerr << "Error executing command." << std::endl;
+        return {};
+    }
+    
+    if (result.empty()) {
+        std::cerr << "No wireless information found for interface " << interface << "." << std::endl;
+        return {};
+    }
+    
+    WirelessInfo wirelessInfo;
+    std::istringstream iss(result);
+    std::string line;
+    while (std::getline(iss, line)) {
+        size_t posSignal = line.find("Signal level=");
+        if (posSignal != std::string::npos) {
+            wirelessInfo.signalLevel = line.substr(posSignal + 13); // 13 is the length of "Signal level="
+        }
+        
+        size_t posBitRate = line.find("Bit Rate=");
+        if (posBitRate != std::string::npos) {
+            std::string bitRateInfo = line.substr(posBitRate + 9); // 9 is the length of "Bit Rate="
+            size_t posTxPower = bitRateInfo.find(" Tx-Power=");
+            if (posTxPower != std::string::npos) {
+                wirelessInfo.bitRate = bitRateInfo.substr(0, posTxPower);
+            } else {
+                wirelessInfo.bitRate = bitRateInfo;
+            }
+        }
+    }
+
+    wirelessInfo.noiseLevel = getNoiseLevel(5180);
+
+    wirelessInfo.snr = std::stod(wirelessInfo.signalLevel) - std::stod(wirelessInfo.noiseLevel);
+
+    return wirelessInfo;
+}
 
 void print_help()
 {
@@ -274,7 +386,6 @@ ibrcommon::BLOB::Reference getBlobChunk(const ibrcommon::BLOB::Reference& blob, 
     return chunkBlob;
 }
 
-
 static int auth_keyfile(ssh_session session, const char* keyfile) {
     ssh_key key = NULL;
     char pubkey[256] = {0}; // Public key file path
@@ -348,6 +459,7 @@ int main(int argc, char *argv[])
 {
     int rc;  
     int ret = EXIT_SUCCESS;
+    WirelessInfo wirelessInfo;
 
     const char* host1 = "localhost";
     const char* user1 = "moreira1";
@@ -494,6 +606,12 @@ int main(int argc, char *argv[])
 
     //Split the file BLOB into smaller BLOBs
     auto ref_chunks = splitBlob(ref,1000);
+
+    wirelessInfo = getWirelessInfo("wlp59s0",5180);
+    std::cout << "Signal Level: " << wirelessInfo.signalLevel << std::endl;
+    std::cout << "Noise Level: " << wirelessInfo.noiseLevel << std::endl;
+    std::cout << "Bit Rate: " << wirelessInfo.bitRate << std::endl;
+    std::cout << "SNR: " << wirelessInfo.snr << std::endl;
 
     EID addr = EID("dtn://moreira-XPS-15-9570");
     //generate bundle()
