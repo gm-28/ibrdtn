@@ -1,3 +1,5 @@
+//sender.cpp 
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -20,10 +22,22 @@
 #include <vector>
 #include <random>
 #include <regex>
+#include <thread>
+
+#include <chrono>
+#include <ctime>
 
 using namespace std;
-std::vector<ibrcommon::BLOB::Reference> blob_vec;
 
+bool lastbundle = false;
+bool lastbundlefound = false;
+size_t remainingSize = 0 ;
+size_t offset = 0;
+
+uint64_t timeSinceEpochMillisec() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
 struct WirelessInfo {
     std::string signalLevel;
     std::string noiseLevel;
@@ -31,7 +45,6 @@ struct WirelessInfo {
     double snr;
 };
 
-// Function to trim whitespace from the beginning and end of a string
 std::string trim(const std::string& str) {
     std::string trimmed = str;
     // Remove leading whitespace
@@ -134,6 +147,31 @@ WirelessInfo getWirelessInfo(const std::string& interface, int channel) {
     wirelessInfo.snr = std::stod(wirelessInfo.signalLevel) - std::stod(wirelessInfo.noiseLevel);
 
     return wirelessInfo;
+}
+
+int convertBitrateToBytes(const std::string& bitrateString)
+{
+    std::istringstream iss(bitrateString);
+    int bitrateValue = 0;
+    std::string unit;
+
+    if (iss >> bitrateValue >> unit)
+    {
+        if (unit == "Mb/s")
+        {
+            bitrateValue *= 1000000 / 8;  // Convert from Megabits to Bytes
+        }
+        else if (unit == "kb/s")
+        {
+            bitrateValue *= 1000 / 8;  // Convert from Kilobits to Bytes
+        }
+        // Add more conversions for other units if needed
+
+        return bitrateValue;
+    }
+
+    // Handle invalid bitrate string
+    throw std::invalid_argument("Invalid bitrate string: " + bitrateString);
 }
 
 void print_help()
@@ -327,6 +365,42 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
     }
 
     disconnect(channel_cmd);
+
+    ssh_channel channel2 = ssh_channel_new(session);
+    rc = ssh_channel_open_session(channel2);
+    if (rc != SSH_OK) {
+        fprintf(stderr, "Failed to open SSH channel 2: %s\n", ssh_get_error(session));
+        ssh_channel_free(channel2);
+        return;
+    }
+
+    // Execute the rm command to delete the file
+    char command2[256];
+    snprintf(command2, sizeof(command2), "rm -f %s", remoteFilePath.c_str());
+
+    rc = ssh_channel_request_exec(channel2, command2);
+    if (rc != SSH_OK) {
+        fprintf(stderr, "Failed to delete file: %s\n", ssh_get_error(session));
+        ssh_channel_free(channel2);
+        return;
+    }
+
+    // Get the exit status of the command
+    int exitStatus2 = ssh_channel_get_exit_status(channel2);
+    if (exitStatus2 == 0) {
+        // printf("File deleted successfully on the remote host\n");
+    } else {
+        fprintf(stderr, "%s\n", ssh_get_error(session));
+    }
+
+    // Wait for the command to complete
+    ssh_channel_send_eof(channel2);
+    ssh_channel_is_eof(channel2); // Wait for end of file indication
+
+    // Close the SSH channel
+    ssh_channel_free(channel2);
+
+    return;
 }
 
 /**
@@ -337,36 +411,36 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
  * 
  * @return A vector of BLOB references, each representing a chunk of the original BLOB.
  */
-std::vector<ibrcommon::BLOB::Reference> splitBlob(const ibrcommon::BLOB::Reference &blob, const size_t chunkSize)
-{
-    std::vector<ibrcommon::BLOB::Reference> chunks;
+// std::vector<ibrcommon::BLOB::Reference> splitBlob(const ibrcommon::BLOB::Reference &blob, const size_t chunkSize)
+// {
+//     std::vector<ibrcommon::BLOB::Reference> chunks;
 
-	// Create a new BLOB reference for this chunk
-	ibrcommon::BLOB::Reference blobref = blob;
+// 	// Create a new BLOB reference for this chunk
+// 	ibrcommon::BLOB::Reference blobref = blob;
 
-    // Get an iostream for the BLOB
-	ibrcommon::BLOB::iostream io = blobref.iostream();
+//     // Get an iostream for the BLOB
+// 	ibrcommon::BLOB::iostream io = blobref.iostream();
 
-    size_t remainingSize = blob.size();
-    size_t offset = 0;
+//     size_t remainingSize = blob.size();
+//     size_t offset = 0;
 
-    while (remainingSize > 0) {
-        size_t chunkLength = std::min(chunkSize, remainingSize);
+//     while (remainingSize > 0) {
+//         size_t chunkLength = std::min(chunkSize, remainingSize);
 
-        ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::create();
-        ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();
+//         ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::create();
+//         ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();
 
-        (*io).seekg(offset, std::ios::beg);
-        ibrcommon::BLOB::copy(*chunkStream, *io, chunkLength);
+//         (*io).seekg(offset, std::ios::beg);
+//         ibrcommon::BLOB::copy(*chunkStream, *io, chunkLength);
 
-        chunks.push_back(chunkBlob);
+//         chunks.push_back(chunkBlob);
 
-        remainingSize -= chunkLength;
-        offset += chunkLength;
-    }
+//         remainingSize -= chunkLength;
+//         offset += chunkLength;
+//     }
 
-    return chunks;
-}
+//     return chunks;
+// }
 
 ibrcommon::BLOB::Reference getBlobChunk(const ibrcommon::BLOB::Reference& blob, size_t chunkSize)
 {
@@ -376,15 +450,27 @@ ibrcommon::BLOB::Reference getBlobChunk(const ibrcommon::BLOB::Reference& blob, 
     // Create a new BLOB reference for this chunk
 	ibrcommon::BLOB::Reference blobref = blob;
 
+    size_t chunkLength = std::min(chunkSize, remainingSize);
+    
+    remainingSize = remainingSize - chunkLength;
+    if(remainingSize  <= 0){
+        lastbundle = true;
+    }
+
     // Get an iostream for the BLOB
     ibrcommon::BLOB::iostream blobStream = blobref.iostream();
+    blobStream->seekg(offset);
 
     // Read the specified chunk size from the original blob
-    ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();
-    ibrcommon::BLOB::copy(*chunkStream, *blobStream, chunkSize);
+    ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();   
+    ibrcommon::BLOB::copy(*chunkStream, *blobStream, chunkLength);
+
+    // Update the offset by the chunk size
+    offset += chunkLength;
 
     return chunkBlob;
 }
+
 
 static int auth_keyfile(ssh_session session, const char* keyfile) {
     ssh_key key = NULL;
@@ -455,12 +541,54 @@ static ssh_session start_session(const char* host, const char* user, const char*
     return session;
 }
 
+dtn::data::Bundle processBundle(ibrcommon::BLOB::Reference ref, const std::string& localFilePath, EID addr_src , EID addr_dest, int nextExpectedBundle) {
+    // create a bundle fro the file
+    dtn::data::Bundle b;
+
+    b.source = addr_src;
+
+    b.destination = addr_dest;
+
+    // set the lifetime
+    b.lifetime = 3600;
+    
+    // add payload block with the references
+    b.push_back(ref);
+
+    if(lastbundle && !lastbundlefound){
+        std::cout << "LAST BUNDLE "<< nextExpectedBundle << std::endl;
+        b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true); 
+    }
+
+    dtn::data::BundleID& id = b;
+    id.sequencenumber.fromString(std::to_string(nextExpectedBundle).c_str());
+
+    // Open the output file stream
+    std::ofstream outputFile(localFilePath, std::ios::binary);
+    // Create a DefaultSerializer object with the output stream
+    dtn::data::DefaultSerializer serializer(outputFile);
+
+    // Serialize the bundle and write it to the file
+    serializer << b;
+    
+    // Close the output file stream
+    outputFile.close();
+
+    return b;
+}
+
 int main(int argc, char *argv[])
 {
     int rc;  
     int ret = EXIT_SUCCESS;
-    WirelessInfo wirelessInfo;
+    WirelessInfo wirelessInfo1;
+    WirelessInfo wirelessInfo2;
 
+    int rf_low_th_24ghz;
+    int rf_high_th_24ghz;
+    int rf_low_th_5ghz;
+    int rf_high_th_5ghz; 
+   
     const char* host1 = "localhost";
     const char* user1 = "moreira1";
     const char* port1 = "2222";
@@ -471,6 +599,10 @@ int main(int argc, char *argv[])
     std::string file_destination1 = "dtn://moreira2-VirtualBox/dtnRecv";
     std::string file_destination2 = "dtn://moreira1-VirtualBox/dtnRecv";
 	std::string filename;
+    
+    const std::string localFilePath1 = "Sender/bundle1.bin";
+    const std::string localFilePath2 = "Sender/bundle2.bin";
+    const std::string remoteFilePath = "ibrdtn/ibrdtn/tools/src/Sender/bundle.bin";
 
 // Check if a filename argument is provided
     if (argc >= 2)
@@ -603,103 +735,126 @@ int main(int argc, char *argv[])
 
     // open file as read-only BLOB
     ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
+    remainingSize = ref.size();
+    std::vector<ibrcommon::BLOB::Reference> blob_vec;
 
-    //Split the file BLOB into smaller BLOBs
-    auto ref_chunks = splitBlob(ref,1000);
+    wirelessInfo1 = getWirelessInfo("wlp59s0",5180);
+    std::cout <<  std::endl;
+    std::cout << "---WIRELESS INFO---" << std::endl;
+    std::cout << "Signal Level: " << wirelessInfo1.signalLevel << std::endl;
+    std::cout << "Noise Level: " << wirelessInfo1.noiseLevel << std::endl;
+    std::cout << "Bit Rate: " << wirelessInfo1.bitRate << std::endl;
+    std::cout << "SNR: " << wirelessInfo1.snr << std::endl;
+    std::cout << "Bit rate: " << convertBitrateToBytes(wirelessInfo1.bitRate) << " Bps"<< std::endl;
+    std::cout << "---WIRELESS INFO---" << std::endl << std::endl;
 
-    wirelessInfo = getWirelessInfo("wlp59s0",5180);
-    std::cout << "Signal Level: " << wirelessInfo.signalLevel << std::endl;
-    std::cout << "Noise Level: " << wirelessInfo.noiseLevel << std::endl;
-    std::cout << "Bit Rate: " << wirelessInfo.bitRate << std::endl;
-    std::cout << "SNR: " << wirelessInfo.snr << std::endl;
 
-    EID addr = EID("dtn://moreira-XPS-15-9570");
-    //generate bundle()
-    for(int i = 0; i < ref_chunks.size(); i++)
-    {
-        // create a bundle from the file
-        dtn::data::Bundle b;
+    EID addr_source = EID("dtn://moreira-XPS-15-9570");
+    EID addr_dest = EID("dtn://moreira-XPS-15-9570");
+    int datasent = 0;
 
-        b.source = addr;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dist(0, 2);
+    uint64_t now;
 
-        b.destination = addr;
+    while(datasent < ref.size()){
+        wirelessInfo1 = getWirelessInfo("wlp59s0",2417);
+        wirelessInfo2 = getWirelessInfo("wlp59s0",2417);
 
-        // add payload block with the references
-        b.push_back(ref_chunks[i]);
-
-        // set destination address to non-singleton
-        if (bundle_group) b.set(dtn::data::PrimaryBlock::DESTINATION_IS_SINGLETON, false);
-
-        // enable encryption if requested
-        if (bundle_encryption) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_ENCRYPT, true);
-
-        // enable signature if requested
-        if (bundle_signed) b.set(dtn::data::PrimaryBlock::DTNSEC_REQUEST_SIGN, true);
-
-        // enable custody transfer if requested
-        if (bundle_custody) {
-            b.set(dtn::data::PrimaryBlock::CUSTODY_REQUESTED, true);
-            b.custodian = dtn::data::EID("api:me");
-        }
-
-        // enable compression
-        if (bundle_compression) b.set(dtn::data::PrimaryBlock::IBRDTN_REQUEST_COMPRESSION, true);
-
-        // set the lifetime
-        b.lifetime = lifetime;
-
-        // set the bundles priority
-        b.setPriority(dtn::data::PrimaryBlock::PRIORITY(priority));
-        
-        if(i == (ref_chunks.size() - 1)){
-            b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true);  
-        }
-
-        dtn::data::BundleID& id = b;
-        int timestamp = std::stoi(id.timestamp.toString().c_str());
-
-        id.sequencenumber.fromString(std::to_string(nextExpectedBundle).c_str());
-
-        nextExpectedBundle++;
-        int sequencenumber = std::stoi(id.sequencenumber.toString().c_str());
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dist(0, 1);
-
-        int random_number = dist(gen); 
-
-        //send the bundle
-        const std::string localFilePath1 = "Sender/bundle1.bin";
-        const std::string localFilePath2 = "Sender/bundle2.bin";
-        const std::string remoteFilePath = "ibrdtn/ibrdtn/tools/src/Sender/bundle.bin";
-
-        // printf("Timestamp [%d] Sequence Number [%d] fragment offset [%s]\n",timestamp,sequencenumber,id.fragmentoffset.toString().c_str());
+        // int random_number = dist(gen); 
+        int random_number = -1;
         if(random_number == 0){
-            // Open the output file stream
-            std::ofstream outputFile(localFilePath2, std::ios::binary);
-            dtn::data::DefaultSerializer serializer(outputFile);
+            ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,convertBitrateToBytes(wirelessInfo1.bitRate));
 
-            // Serialize the bundle and write it to the file
-            serializer << b;
+            dtn::data::Bundle b = processBundle(ref2,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
+            if(std::atoi(b.sequencenumber.toString().c_str())==0){
+                std::cout << timeSinceEpochMillisec() << std::endl;
+
+                now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                // uint64_t seconds = now / 1000;
+            }
             
-            // Close the output file stream
-            outputFile.close();
-
             sendBundle(session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1");
-        }else{
-            // Open the output file stream
-            std::ofstream outputFile(localFilePath1, std::ios::binary);
-            // Create a DefaultSerializer object with the output stream
-            dtn::data::DefaultSerializer serializer(outputFile);
+        
+            datasent+=static_cast<int>(b.getPayloadLength());
 
-            // Serialize the bundle and write it to the file
-            serializer << b;
-            
-            // Close the output file stream
-            outputFile.close();
+            char command[256];
+            snprintf(command, sizeof(command), "rm -f %s", localFilePath2.c_str());
+            system(command);
+        }else  if(random_number == 1){
+            ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,convertBitrateToBytes(wirelessInfo1.bitRate));
+
+            dtn::data::Bundle b = processBundle(ref2,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             
             sendBundle(session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2");
+        
+            datasent+=static_cast<int>(b.getPayloadLength());
+
+            char command[256];
+            snprintf(command, sizeof(command), "rm -f %s", localFilePath1.c_str());
+            system(command);
+        }else  if(random_number == 2){
+            ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,convertBitrateToBytes(wirelessInfo1.bitRate));
+
+            dtn::data::Bundle b1 = processBundle(ref2,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
+            dtn::data::Bundle b2 = processBundle(ref2,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
+
+            //sender threads
+            std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2");
+            std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1");
+
+            senderThread2.join();
+            senderThread1.join();
+            
+            datasent+=static_cast<int>(b1.getPayloadLength());
+
+            char command[256];
+            snprintf(command, sizeof(command), "rm -f %s", localFilePath1.c_str());
+            system(command);
+            char command2[256];
+            snprintf(command2, sizeof(command2), "rm -f %s", localFilePath2.c_str());
+            system(command2);
+        }else if (1){
+            ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2));
+            
+            dtn::data::Bundle b1 = processBundle(ref2,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
+            nextExpectedBundle++;
+            
+            dtn::data::Bundle b2;
+            if(ref2.size() >= std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2) ){
+                std::cout << "HERE\n";
+                ibrcommon::BLOB::Reference ref3 = getBlobChunk(ref,std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2));
+                b2 = processBundle(ref3,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
+            }
+
+            std::cout << "size: "<< std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2) << std::endl;
+             
+            now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            // uint64_t seconds = now / 1000;
+            
+            //sender threads
+            if(ref2.size() >= std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2) ){
+                std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1");
+                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2");
+                senderThread2.join();
+                senderThread1.join();
+            }else{
+                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2");
+                senderThread2.join();
+            }
+            char command[256];
+            snprintf(command, sizeof(command), "rm -f %s", localFilePath1.c_str());
+            system(command);
+            char command2[256];
+            snprintf(command2, sizeof(command2), "rm -f %s", localFilePath2.c_str());
+            system(command2);
+            datasent+=static_cast<int>(b1.getPayloadLength());
+            datasent+=static_cast<int>(b2.getPayloadLength());
+
         }
+        nextExpectedBundle++;
+
     }
 
     // Close the channels and disconnect from the virtual machines
@@ -710,8 +865,8 @@ int main(int argc, char *argv[])
     ssh_free(session1);
     ssh_disconnect(session2);
     ssh_free(session2);
+    std::cout << "Start time (miliseconds):" << now << std::endl;
     std::cout << filename <<" has been sent" << std::endl;
 
     return 0;
 }
-
