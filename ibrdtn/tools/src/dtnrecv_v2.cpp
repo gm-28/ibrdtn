@@ -127,6 +127,7 @@ int main(int argc, char *argv[])
 	sighandler.initialize();
 
 	int ret = EXIT_SUCCESS;
+	std::string reg ="";
 	std::string filename = "";
 	std::string name = "filetransfer";
 	dtn::data::EID group;
@@ -179,6 +180,11 @@ int main(int argc, char *argv[])
 		if (arg == "--count" && argc > i) 
 		{
 			count = atoi(argv[i + 1]);
+		}
+
+		if (arg == "--reg" && argc > i) 
+		{
+			reg = atoi(argv[i + 1]);
 		}
 
 		if (arg == "-U" && argc > i)
@@ -286,7 +292,7 @@ int main(int argc, char *argv[])
 		// Shutdown the client connection.
 		client.close();
 
-    	std::string command = "python3 ibrdtn/ibrdtn/tools/src/removebundle2.py " + timestamp + " " + sequencenumber + " " + sourceeid;
+    	std::string command = "python3 ibrdtn/ibrdtn/tools/src/removebundle.py " + timestamp + " " + sequencenumber + " " + sourceeid + " " + reg;
     	int result = system(command.c_str()); 		
 		if (result == 0){
 			std::cout << "Bundle freed successfully!"<< std::endl;
