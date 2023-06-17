@@ -7,7 +7,6 @@ script_name = arguments[0]
 timestamp = arguments[1]
 seq_nr = arguments[2]
 source_eid = arguments[3]
-registration = arguments[4]
 
 HOST = 'localhost'
 PORT = 4550
@@ -35,10 +34,6 @@ sock.send(b"protocol extended\n")
 
 ''' Read the protocol switch '''
 fsock.readline()
-
-''' Add registration '''
-registration_command = "registration add  {} \n".format(registration)
-sock.send(registration_command.encode())
 
 ''' Load bundle based on timestamp, sequence number, and source EID '''
 load_command = "bundle load {} {} {}\n".format(timestamp, seq_nr, source_eid)

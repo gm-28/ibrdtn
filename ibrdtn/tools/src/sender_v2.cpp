@@ -34,20 +34,21 @@ using namespace std;
 bool ackBundle = false;
 bool ackBundle1 = false;
 bool ackBundle2 = false;
-
 bool lastbundle = false;
-size_t remainingSize = 0 ;
+
 // size_t offset = 0;
 std::mutex bundleMapMutex;
 std::mutex stopMutex;
 std::map<int, int> offsetMap;
+std::map<int, int> bundleSize;
 std::map<int, bool> ackMap;
-
+int datasent = 0;
 
 uint64_t timeSinceEpochMillisec() {
   using namespace std::chrono;
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
+
 struct WirelessInfo {
     std::string signalLevel;
     std::string noiseLevel;
@@ -407,10 +408,9 @@ bool transferFileFromRemote(ssh_session session, const std::string& remoteFilePa
     return true;
 }
 
-void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath,int timeoutSeconds) {    
+void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath,int timeoutSeconds, int nextExpectedBundle) {    
     int rc;
     bool terminateFlag = false;
-    std::cout << "Test" << std::endl;
 
     while(!terminateFlag){
         // Execute the receiver command in a loop
@@ -423,7 +423,8 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             return;
         }
 
-        std::string command = "dtnrecv_v2 --file " + remoteFilePath + " --name ackRecv";
+        std::string command = "dtnrecv --file " + remoteFilePath + " --name ackRecv";
+        std::cout << user << ": " << command << std::endl;
         rc = ssh_channel_request_exec(channel, command.c_str());
         if (rc != SSH_OK) {
             fprintf(stderr, "Failed to execute SSH command: %s\n", ssh_get_error(session));
@@ -438,18 +439,18 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
         while (exitStatus == -1) {
             exitStatus = ssh_channel_get_exit_status(channel);
             // std::cout << "exit != 0"<< std::endl;
-            // // Check if the timeout has been reached
-            // auto currentTime = std::chrono::steady_clock::now();
-            // auto elapsedTime = std::chrono::duration_cast<std::chrono::seconds>(currentTime - startTime);
-            // if (elapsedTime >= std::chrono::seconds(timeoutSeconds)) {
-            //     // Timeout reached, break the loop
-            //     break;
-            // }
+            // Check if the timeout has been reached
+            auto currentTime = std::chrono::steady_clock::now();
+            auto elapsedTime = std::chrono::duration_cast<std::chrono::seconds>(currentTime - startTime);
+            if (elapsedTime >= std::chrono::seconds(timeoutSeconds)) {
+                std::cout << user << ": Timeout reached" << std::endl;
+                ssh_channel_set_blocking(channel, 1);
+                return;
+            }
         }
 
         ssh_channel_set_blocking(channel, 1);
         if (exitStatus == 0) {
-            terminateFlag = true;
             // When the bundle is received, transfer it to the destination host
             if (!transferFileFromRemote(session, remoteFilePath, localFilePath,user)) {
                 printf( "Error transferring bundle.bin from remote\n");
@@ -497,16 +498,15 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             dtn::data::BundleID& id = bundle;
             // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
             int sequencenumber = std::stoi(id.sequencenumber.toString());
-            if(bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) == true){
+            if((bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) == true) && (sequencenumber == nextExpectedBundle)){
                 {
                     std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
                     ackMap[sequencenumber] = true;
                     terminateFlag = true;
-                    std::cout <<"Ack of " << id.sequencenumber.toString().c_str() <<" received." << std::endl;
+                    std::cout <<user <<": Ack of " << id.sequencenumber.toString().c_str() <<" received." << std::endl;
 
                 }
-            }
-            
+            }            
 
             disconnect(channel);
         }
@@ -514,7 +514,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
     return;
 }
 
-void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination,const char* user,const char* ackdest) {
+void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination,const char* user,const char* ackdest, int nextExpectedBundle) {
     bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath,user);
     if (!transferSuccess) {
         std::cerr << "Error transferring file: " << localFilePath << std::endl;
@@ -585,7 +585,7 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
     // Close the SSH channel
     ssh_channel_free(channel2);
 
-    receiver(session,user,ackdest,"ibrdtn/ibrdtn/tools/src/Receiver/bundleACK.bin",2);
+    receiver(session,user,ackdest,"ibrdtn/ibrdtn/tools/src/Receiver/bundleACK.bin",2,nextExpectedBundle);
 
     return;
 }
@@ -596,26 +596,26 @@ ibrcommon::BLOB::Reference getBlobChunk(const ibrcommon::BLOB::Reference& blob, 
         offsetMap[sequencenumber] = 0;
     }
 
-    // Create a new BLOB reference for the chunk
-    ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::create();
+    size_t remainingSize = 0 ;
+    int current_offset = offsetMap[sequencenumber];
 
+    // Get an iostream for the BLOB
     // Create a new BLOB reference for this chunk
 	ibrcommon::BLOB::Reference blobref = blob;
+    ibrcommon::BLOB::iostream blobStream = blobref.iostream();
+
+    remainingSize = blobStream.size() - current_offset;
+    std::cout << "Remaining size: " << remainingSize << std::endl;
 
     size_t chunkLength = std::min(chunkSize, remainingSize);
 
-    int current_offset = offsetMap[sequencenumber];
-
-    remainingSize = remainingSize - chunkLength;
-    if(remainingSize  <= 0){
+    if((remainingSize - chunkLength)  <= 0){
         lastbundle = true;
     }
 
-    // Get an iostream for the BLOB
-    ibrcommon::BLOB::iostream blobStream = blobref.iostream();
     blobStream->seekg(current_offset);
 
-    // Read the specified chunk size from the original blob
+    ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::create();
     ibrcommon::BLOB::iostream chunkStream = chunkBlob.iostream();   
     ibrcommon::BLOB::copy(*chunkStream, *blobStream, chunkLength);
 
@@ -708,10 +708,13 @@ dtn::data::Bundle processBundle(ibrcommon::BLOB::Reference ref, const std::strin
     
     // add payload block with the references
     b.push_back(ref);
+    
+    bundleSize[nextExpectedBundle] = static_cast<int>(ref.size());
 
     if(lastbundle){
         // std::cout << "LAST BUNDLE "<< nextExpectedBundle << std::endl;
-        b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true); 
+        b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true);
+        std::cout << "Last bundle = " << nextExpectedBundle << std::endl;
     }
 
     dtn::data::BundleID& id = b;
@@ -733,11 +736,13 @@ dtn::data::Bundle processBundle(ibrcommon::BLOB::Reference ref, const std::strin
 
 int findnextsequencenumber(int start_counter){
     int counter = start_counter;
-    bool keyFound = !ackMap.empty() && (ackMap.find(counter) != ackMap.end());
-    while(keyFound){
-        std::cout << "Counter " << counter << std::endl;
-        counter++;
-        keyFound = !ackMap.empty() && (ackMap.find(start_counter) != ackMap.end());
+    if(!ackMap.empty()){
+        bool keyFound =  (ackMap.find(counter) != ackMap.end());
+        while(keyFound){
+            std::cout << "Counter " << counter << std::endl;
+            counter++;
+            keyFound = (ackMap.find(counter) != ackMap.end());
+        }
     }
     return counter;
 }
@@ -900,7 +905,7 @@ int main(int argc, char *argv[])
 
     // open file as read-only BLOB
     ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
-    remainingSize = ref.size();
+    // remainingSize = ref.size();
     std::vector<ibrcommon::BLOB::Reference> blob_vec;
 
     wirelessInfo1 = getWirelessInfo("wlp59s0",5180);
@@ -916,7 +921,6 @@ int main(int argc, char *argv[])
 
     EID addr_source = EID("dtn://moreira-XPS-15-9570");
     EID addr_dest = EID("dtn://moreira-XPS-15-9570");
-    int datasent = 0;
 
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -926,9 +930,10 @@ int main(int argc, char *argv[])
     dtn::data::Bundle b2;
     int it =0; 
     while(datasent < ref.size()){
+        std::cout << "Data sent =  " << datasent << std::endl;
         std::cout << "Iteration: " << it << std::endl;
         it++;
-        nextExpectedBundle = findnextsequencenumber(nextExpectedBundle);
+        nextExpectedBundle = findnextsequencenumber(0);
         if(nextExpectedBundle == 0){
             offsetMap[nextExpectedBundle] = 0;
         }
@@ -938,9 +943,9 @@ int main(int argc, char *argv[])
 
         //EXECUTE THE MANAGER ALGORITHIM
 
-        int condition = 1;
+        int condition = 4;
         if (condition == 1){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,100000,nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
 
             b1 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
             if(std::atoi(b1.sequencenumber.toString().c_str())==0){
@@ -950,43 +955,57 @@ int main(int argc, char *argv[])
 
             // bundleList.push_back(b);
 
-            sendBundle(session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin");
-            if(!ackMap.empty() && (ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
-                datasent+=static_cast<int>(b1.getPayloadLength());
-                std::cout << "Data sent =  " << datasent << std::endl;
+            sendBundle(session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",nextExpectedBundle);
+            if(!ackMap.empty()){
+                if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
+                    datasent+=static_cast<int>(b1.getPayloadLength());
+                    // remainingSize -= static_cast<int>(b1.getPayloadLength());
+                }
             }
 
             char command1[256];
             snprintf(command1, sizeof(command1), "rm -f %s", localFilePath2.c_str());
             system(command1);
         }else if (condition == 2){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,convertBitrateToBytes(wirelessInfo1.bitRate),nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
 
-            b2 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
-            
-            sendBundle(session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin");
-            if(!ackMap.empty() && (ackMap.find(std::atoi(b2.sequencenumber.toString().c_str())) != ackMap.end())){
-                datasent+=static_cast<int>(b2.getPayloadLength());
+            b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
+            if(std::atoi(b1.sequencenumber.toString().c_str())==0){
+                now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                // uint64_t seconds = now / 1000;
             }
 
-            char command2[256];
-            snprintf(command2, sizeof(command2), "rm -f %s", localFilePath1.c_str());
-            system(command2);
+            // bundleList.push_back(b);
+
+            sendBundle(session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin",nextExpectedBundle);
+            if(!ackMap.empty()){
+                if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
+                    datasent+=static_cast<int>(b1.getPayloadLength());
+                    // remainingSize -= static_cast<int>(b1.getPayloadLength());
+                }
+            }
+
+            char command1[256];
+            snprintf(command1, sizeof(command1), "rm -f %s", localFilePath1.c_str());
+            system(command1);
         }else if(condition == 3){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,convertBitrateToBytes(wirelessInfo1.bitRate),nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
 
             b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             b2 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
 
             //sender threads
-            std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin");
-            std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin");
+            std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin",nextExpectedBundle);
+            std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",nextExpectedBundle);
 
             senderThread2.join();
             senderThread1.join();
 
-            if(!ackMap.empty() && (ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
-                datasent+=static_cast<int>(b1.getPayloadLength());
+            if(!ackMap.empty()){
+                if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
+                    datasent+=static_cast<int>(b1.getPayloadLength());
+                    // remainingSize -= static_cast<int>(b1.getPayloadLength());
+                }
             }
 
             char command3[256];
@@ -994,15 +1013,16 @@ int main(int argc, char *argv[])
             system(command3);
 
         }else if(condition == 4){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,70269,nextExpectedBundle);
-            
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
+            int temp = nextExpectedBundle;
             b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             
-            nextExpectedBundle = findnextsequencenumber(nextExpectedBundle);
+            nextExpectedBundle = findnextsequencenumber(nextExpectedBundle+1);
+            std::cout << "Sequence of 2nd number = " << nextExpectedBundle << std::endl;
 
             //mudar o tamanho na condição
-            if(ref1.size() >= 70269 ){
-                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,70269,nextExpectedBundle);
+            if(ref1.size() >= 40000 ){
+                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,40000,nextExpectedBundle);
                 b2 = processBundle(ref2,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
             }
             
@@ -1010,13 +1030,14 @@ int main(int argc, char *argv[])
             // uint64_t seconds = now / 1000;
             
             //sender threads
-            if(ref1.size() >= std::ceil(convertBitrateToBytes(wirelessInfo1.bitRate)/2) ){
-                std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin");
-                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin");
-                senderThread2.join();
+            if(ref1.size() >= 40000 ){
+                std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",nextExpectedBundle);
+                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin",temp);
                 senderThread1.join();
+                senderThread2.join();
+
             }else{
-                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin");
+                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin",nextExpectedBundle);
                 senderThread2.join();
             }
             char command[256];
@@ -1026,12 +1047,17 @@ int main(int argc, char *argv[])
             snprintf(command2, sizeof(command2), "rm -f %s", localFilePath2.c_str());
             system(command2);
             
-            if(!ackMap.empty() && (ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
-                datasent+=static_cast<int>(b1.getPayloadLength());
+            if(!ackMap.empty()){
+                if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
+                    datasent+=static_cast<int>(b1.getPayloadLength());
+                    std::cout << "ACK " << std::atoi(b1.sequencenumber.toString().c_str()) << std::endl;
+                }
             }
-
-            if(ackMap[std::atoi(b2.sequencenumber.toString().c_str())]){
-                datasent+=static_cast<int>(b2.getPayloadLength());
+            if(!ackMap.empty()){
+                if((ackMap.find(std::atoi(b2.sequencenumber.toString().c_str())) != ackMap.end())){
+                    datasent+=static_cast<int>(b2.getPayloadLength());
+                    std::cout << "ACK " << std::atoi(b2.sequencenumber.toString().c_str()) << std::endl;
+                }
             }
         }else if(condition == 5){
             std::cout << "Condition AC" << std::endl;
@@ -1043,6 +1069,7 @@ int main(int argc, char *argv[])
             //sendbundle with ac!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             if(!ackMap.empty() && (ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
                 datasent+=static_cast<int>(b1.getPayloadLength());
+                // remainingSize -= static_cast<int>(b1.getPayloadLength());
             }
 
             char command2[256];
