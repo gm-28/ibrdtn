@@ -31,10 +31,24 @@
 
 using namespace std;
 
+#define OFF 0
+#define HANDOVER 1
+#define ACTIVE 2
+
 bool ackBundle = false;
 bool ackBundle1 = false;
 bool ackBundle2 = false;
 bool lastbundle = false;
+int lastbundle_sequence = -1;
+int datasent = 0;
+
+double rf_low_th_24ghz = 35;
+double rf_high_th_24ghz = 40;
+double rf_low_th_5ghz = 40;
+double rf_high_th_5ghz = 43; 
+
+int channelsize1 = 0;
+int channelsize2 = 0;
 
 // size_t offset = 0;
 std::mutex bundleMapMutex;
@@ -42,18 +56,19 @@ std::mutex stopMutex;
 std::map<int, int> offsetMap;
 std::map<int, int> bundleSize;
 std::map<int, bool> ackMap;
-int datasent = 0;
 
 uint64_t timeSinceEpochMillisec() {
   using namespace std::chrono;
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-struct WirelessInfo {
+struct WirelessInfo{
     std::string signalLevel;
     std::string noiseLevel;
     std::string bitRate;
     double snr;
+    double timeout;
+    int state;
 };
 
 std::string trim(const std::string& str) {
@@ -610,7 +625,7 @@ ibrcommon::BLOB::Reference getBlobChunk(const ibrcommon::BLOB::Reference& blob, 
     size_t chunkLength = std::min(chunkSize, remainingSize);
 
     if((remainingSize - chunkLength)  <= 0){
-        lastbundle = true;
+        lastbundle_sequence = sequencenumber;
     }
 
     blobStream->seekg(current_offset);
@@ -711,7 +726,7 @@ dtn::data::Bundle processBundle(ibrcommon::BLOB::Reference ref, const std::strin
     
     bundleSize[nextExpectedBundle] = static_cast<int>(ref.size());
 
-    if(lastbundle){
+    if(nextExpectedBundle == lastbundle_sequence){
         // std::cout << "LAST BUNDLE "<< nextExpectedBundle << std::endl;
         b.set(dtn::data::PrimaryBlock::LAST_BUNDLE, true);
         std::cout << "Last bundle = " << nextExpectedBundle << std::endl;
@@ -747,17 +762,74 @@ int findnextsequencenumber(int start_counter){
     return counter;
 }
 
+int state_update(double snr,double low_th, double high_th ){
+    if(snr < low_th){
+        return OFF;
+    }else if (low_th <= snr && snr < high_th ){
+        return HANDOVER;
+    }else if (high_th <= snr){
+        return ACTIVE;
+    }
+    return -1;
+}
+
+int decision_unit(WirelessInfo wirelessInfo1, WirelessInfo wirelessInfo2){
+    int ret;
+    std::cout << "SNR: " << wirelessInfo1.snr << std::endl;
+    std::cout << "SNR: " << wirelessInfo2.snr << std::endl;
+    wirelessInfo1.state = state_update(wirelessInfo1.snr,rf_low_th_24ghz,rf_high_th_24ghz);
+    wirelessInfo2.state = state_update(wirelessInfo2.snr,rf_low_th_5ghz,rf_high_th_5ghz);
+
+    if (wirelessInfo1.state == OFF && wirelessInfo2.state == OFF){
+        ret = 0;
+    }else if (wirelessInfo1.state == HANDOVER && wirelessInfo2.state == OFF){
+        //return ac + rf1 same bundles;
+    }else if (wirelessInfo1.state == ACTIVE && wirelessInfo2.state == OFF){
+        channelsize1 = convertBitrateToBytes(wirelessInfo1.bitRate);
+        channelsize1 = 40000;
+        ret = 1;
+        //return ac + rf1 diff bundles;
+    }else if (wirelessInfo1.state == OFF && wirelessInfo2.state == ACTIVE){
+        channelsize2 = convertBitrateToBytes(wirelessInfo2.bitRate);
+        ret = 2;
+        //return ac + rf1 + rf2 same bundles;
+    }else if (wirelessInfo1.state == HANDOVER && wirelessInfo2.state == HANDOVER){
+        //return ac + rf1 + rf2 same bundles;
+    }else if ((wirelessInfo1.state == ACTIVE && wirelessInfo2.state == HANDOVER) || (wirelessInfo1.state == HANDOVER && wirelessInfo2.state == ACTIVE)){
+        if(wirelessInfo1.state == ACTIVE){
+            //atualizar tamanho
+            channelsize1 = convertBitrateToBytes(wirelessInfo1.bitRate);
+            channelsize1 = 40000;
+        }else if(wirelessInfo2.state == ACTIVE){
+            //atualizar tamanho
+            channelsize1 = convertBitrateToBytes(wirelessInfo2.bitRate);
+            channelsize1 = 40000;
+        }
+
+        ret = 3;
+        //return ac + rf1 + rf2 same bundles;
+    }else if (wirelessInfo1.state == ACTIVE && wirelessInfo2.state == ACTIVE){
+        //atualizar tamanho
+        channelsize1 = convertBitrateToBytes(wirelessInfo2.bitRate); //carefully choose this, it depends on the rf card and to each remote machine it is connected
+        channelsize2 = convertBitrateToBytes(wirelessInfo1.bitRate);
+
+        channelsize1 = 40000;
+        channelsize2 = 20000;
+        ret = 4;
+        //return ac + rf1 + rf2 same bundles;
+    }else {
+        ret = 0;
+    }
+    std::cout << "Condition " << ret << std::endl;
+    return ret;
+}
+
 int main(int argc, char *argv[])
 {
     int rc;  
     int ret = EXIT_SUCCESS;
     WirelessInfo wirelessInfo1;
     WirelessInfo wirelessInfo2;
-
-    int rf_low_th_24ghz;
-    int rf_high_th_24ghz;
-    int rf_low_th_5ghz;
-    int rf_high_th_5ghz; 
    
     const char* host1 = "localhost";
     const char* user1 = "moreira1";
@@ -928,7 +1000,8 @@ int main(int argc, char *argv[])
     uint64_t now;
     dtn::data::Bundle b1;
     dtn::data::Bundle b2;
-    int it =0; 
+    int it =0;
+
     while(datasent < ref.size()){
         std::cout << "Data sent =  " << datasent << std::endl;
         std::cout << "Iteration: " << it << std::endl;
@@ -938,14 +1011,12 @@ int main(int argc, char *argv[])
             offsetMap[nextExpectedBundle] = 0;
         }
         std::cout << "Sequence number = " << nextExpectedBundle << std::endl;
-        wirelessInfo1 = getWirelessInfo("wlp59s0",2417);
-        wirelessInfo2 = getWirelessInfo("wlp59s0",2417);
+        wirelessInfo1 = getWirelessInfo("wlp59s0",5180);
+        wirelessInfo2 = getWirelessInfo("wlp59s0",5180);
 
-        //EXECUTE THE MANAGER ALGORITHIM
-
-        int condition = 4;
+        int condition = decision_unit(wirelessInfo1,wirelessInfo2);
         if (condition == 1){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,channelsize1,nextExpectedBundle);
 
             b1 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
             if(std::atoi(b1.sequencenumber.toString().c_str())==0){
@@ -967,7 +1038,7 @@ int main(int argc, char *argv[])
             snprintf(command1, sizeof(command1), "rm -f %s", localFilePath2.c_str());
             system(command1);
         }else if (condition == 2){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,channelsize2,nextExpectedBundle);
 
             b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             if(std::atoi(b1.sequencenumber.toString().c_str())==0){
@@ -989,7 +1060,7 @@ int main(int argc, char *argv[])
             snprintf(command1, sizeof(command1), "rm -f %s", localFilePath1.c_str());
             system(command1);
         }else if(condition == 3){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,channelsize1,nextExpectedBundle);
 
             b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             b2 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
@@ -1013,7 +1084,8 @@ int main(int argc, char *argv[])
             system(command3);
 
         }else if(condition == 4){
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,40000,nextExpectedBundle);
+            // if(wirelessInfo2.state == ACTIVE){
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,channelsize1,nextExpectedBundle);
             int temp = nextExpectedBundle;
             b1 = processBundle(ref1,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
             
@@ -1021,8 +1093,8 @@ int main(int argc, char *argv[])
             std::cout << "Sequence of 2nd number = " << nextExpectedBundle << std::endl;
 
             //mudar o tamanho na condição
-            if(ref1.size() >= 40000 ){
-                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,40000,nextExpectedBundle);
+            if(ref1.size() >= channelsize1 ){
+                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,channelsize2,nextExpectedBundle);
                 b2 = processBundle(ref2,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
             }
             
@@ -1030,16 +1102,46 @@ int main(int argc, char *argv[])
             // uint64_t seconds = now / 1000;
             
             //sender threads
-            if(ref1.size() >= 40000 ){
+            if(ref1.size() >= channelsize1 ){
                 std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",nextExpectedBundle);
                 std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin",temp);
                 senderThread1.join();
                 senderThread2.join();
 
             }else{
-                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack1.bin",nextExpectedBundle);
+                std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin",temp);
                 senderThread2.join();
             }
+            // }else if (wirelessInfo1.state == ACTIVE){
+            //     ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref,channelsize1,nextExpectedBundle);
+            //     int temp = nextExpectedBundle;
+            //     b1 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
+                
+            //     nextExpectedBundle = findnextsequencenumber(nextExpectedBundle+1);
+            //     std::cout << "Sequence of 2nd number = " << nextExpectedBundle << std::endl;
+
+            //     //mudar o tamanho na condição
+            //     if(ref1.size() >= channelsize1 ){
+            //         ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref,channelsize2,nextExpectedBundle);
+            //         b2 = processBundle(ref2,localFilePath1,addr_source,addr_dest,nextExpectedBundle);
+            //     }
+                
+            //     now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            //     // uint64_t seconds = now / 1000;
+                
+            //     //sender threads
+            //     if(ref1.size() >= channelsize1 ){
+            //         std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",temp);
+            //         std::thread senderThread2(sendBundle,session2,localFilePath1,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira1-VirtualBox/dtnRecv","moreira2","Receiver/bundleack2.bin",nextExpectedBundle);
+            //         senderThread1.join();
+            //         senderThread2.join();
+
+            //     }else{
+            //         std::thread senderThread1(sendBundle,session1,localFilePath2,"ibrdtn/ibrdtn/tools/src/Sender/bundle.bin", "dtn://moreira2-VirtualBox/dtnRecv","moreira1","Receiver/bundleack1.bin",temp);
+            //         senderThread1.join();
+            //     }
+            // }
+            
             char command[256];
             snprintf(command, sizeof(command), "rm -f %s", localFilePath1.c_str());
             system(command);
