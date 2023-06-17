@@ -31,17 +31,19 @@
 #include <chrono>
 #include <ctime>
 
-std::fstream file;
-std::map<int, dtn::data::Bundle> bundleMap;
+
 int nextExpectedBundle = 0;
 int exitStatus = 0;
 int lastsequencenumber = -1;
+bool lastbundlefound = false;
+
+std::fstream file;
+std::map<int, dtn::data::Bundle> bundleMap;
 std::atomic<bool> terminateFlag(false);
 std::mutex bundleMapMutex;
 std::mutex stopMutex;
 std::time_t currentTime;
 uint64_t now;
-bool lastbundlefound = false;
 
 dtn::data::Bundle processACKBundle( const std::string& localFilePath, EID addr_src , EID addr_dest, int nextExpectedBundle) {
     // create a bundle fro the file
