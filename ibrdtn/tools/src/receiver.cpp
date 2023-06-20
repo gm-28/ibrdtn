@@ -27,10 +27,10 @@
 #include <atomic>
 #include <map>
 #include <mutex>
-
+#include <fstream>
 #include <chrono>
 #include <ctime>
-
+#include <tuple>
 
 int nextExpectedBundle = 0;
 int exitStatus = 0;
@@ -38,6 +38,7 @@ int lastsequencenumber = -1;
 bool lastbundlefound = false;
 
 std::fstream file;
+std::map<int,bool > ackMap;
 std::map<int, dtn::data::Bundle> bundleMap;
 std::atomic<bool> terminateFlag(false);
 std::mutex bundleMapMutex;
@@ -475,6 +476,164 @@ void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
     }
 }
 
+std::tuple<int, bool, bool> removeHeaderFlags(const std::string& filename)
+{
+    // Open the original file
+    std::ifstream originalFile(filename, std::ios::binary);
+    if (!originalFile.is_open()) {
+        // File opening failed
+        std::cerr << "Failed to open file: " << filename << std::endl;
+        return std::make_tuple(-1, false, false);
+    }
+
+    // Get the size of the file
+    originalFile.seekg(0, std::ios::end);
+    std::streampos fileSize = originalFile.tellg();
+    originalFile.seekg(0, std::ios::beg);
+
+    // Read the header flags
+    char flags;
+    int sequenceNumber;
+    bool lastChunkFlag;
+    bool ackFlag;
+
+    originalFile.read(&flags, sizeof(flags));
+    originalFile.read(reinterpret_cast<char*>(&sequenceNumber), sizeof(sequenceNumber));
+
+    lastChunkFlag = (flags & 0x01) != 0;  // Extract last chunk flag from flags
+    ackFlag = (flags & 0x02) != 0;        // Extract ACK flag from flags
+
+    // Calculate the size of the remaining data
+    std::streampos remainingSize = fileSize - sizeof(flags) - sizeof(sequenceNumber);
+
+    // Open a new file for writing the data without the header flags
+    std::ofstream outputFile("Receiver/newbundleac.bin", std::ios::binary);
+    if (!outputFile.is_open()) {
+        // File creation failed
+        std::cerr << "Failed to create file: newbundleac.bin" << filename << std::endl;
+        originalFile.close();
+        return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag);
+    }
+
+    // Copy the data without the header flags
+    char buffer[1024];
+    std::streampos bytesRead = 0;
+    while (bytesRead < remainingSize) {
+        std::streamsize chunkSize = std::min(static_cast<std::streamsize>(sizeof(buffer)), static_cast<std::streamsize>(remainingSize - bytesRead));
+        originalFile.read(buffer, chunkSize);
+        outputFile.write(buffer, chunkSize);
+        bytesRead += chunkSize;
+    }
+
+    // Close the files
+    originalFile.close();
+    outputFile.close();
+
+    return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag);
+}
+
+void createChunkFile(int sequenceNumber, const ibrcommon::BLOB::Reference& chunkBlob, std::string filename, bool isLastChunk, bool ackFlag)
+{
+    std::ofstream file(filename, std::ios::binary);
+    ibrcommon::BLOB::Reference blobref = chunkBlob;
+    ibrcommon::BLOB::iostream blobStream = blobref.iostream();
+
+    if (file.is_open()) {
+        ibrcommon::BLOB::iostream chunkStream = blobStream;
+
+        // Write the flags
+        char flags = 0;
+        if (isLastChunk) flags |= 0x01;   // Set the last chunk flag
+        if (ackFlag) flags |= 0x02;       // Set the ACK flag
+        file.write(&flags, sizeof(flags));
+
+        // Write the sequence number as a header to the file
+        file.write(reinterpret_cast<const char*>(&sequenceNumber), sizeof(sequenceNumber));
+
+        // Write the chunk data to the file
+        file << chunkStream->rdbuf();
+
+        file.close();
+        std::cout << "Chunk file created: " << filename << std::endl;
+    } else {
+        std::cerr << "Failed to create chunk file: " << filename << std::endl;
+    }
+}
+
+void ac_receiver(const std::string& filename){
+    std::string filepath = "/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin";
+    while(!terminateFlag){
+        std::ifstream file(filepath);
+        if(file.good()){
+            auto result = removeHeaderFlags("/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin");
+            int sequenceNumber = std::get<0>(result);
+            bool isLastChunk = std::get<1>(result);
+
+            std::__cxx11::string filename2 = "Receiver/newbundleac.bin";
+            ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::open(filename2);
+            
+            std::cout << "Received bundle: " << sequenceNumber << " on AC size: "<< chunkBlob.size() << std::endl;
+            
+            EID addr_src = EID("dtn://moreira-XPS-15-9570");
+            EID addr_dest = EID("dtn://moreira-XPS-15-9570");
+            dtn::data::Bundle bundle;
+            bundle.source = addr_src;
+            bundle.destination = addr_dest;
+            bundle.push_back(chunkBlob);
+            bundle.set(dtn::data::PrimaryBlock::LAST_BUNDLE, isLastChunk);
+
+            dtn::data::BundleID& id = bundle;
+
+            // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
+            id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
+            if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
+                {
+                    std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
+                    lastbundlefound = true;
+                    lastsequencenumber = sequenceNumber;
+                    std::cout << "Last sequence number " << lastsequencenumber << std::endl;
+                }
+
+            }
+
+            if (sequenceNumber == nextExpectedBundle) {
+                writeToFile(sequenceNumber, bundle,"ac");
+            } else {
+                // Store the bundle in the map or update existing entry
+                {
+                    std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
+                    bundleMap[sequenceNumber] = bundle;
+                } // The lock is automatically released when lock goes out of scope
+            }
+            
+            std::string filenameac = "Sender/ack.txt";
+            ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
+
+            createChunkFile(sequenceNumber, ref, "/home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin", false ,true); //overhead of 4 bytes because of int
+
+            std::string src_ip = "192.168.1.68";
+            std::string src_port = "1102";
+            std::string dest_node = "232";
+            std::string timeout = "10000";
+            std::string filenameack = "bundleack.bin";
+            
+            std::string command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + timeout + " " + filenameack;
+            int result1 = ::system(command.c_str()); 		
+            if (result1 != 0){
+                std::cout << "Error sending through ac"<< std::endl;
+            }
+            // std::string command2 = "rm /home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin";
+            // result1 = std::system(command2.c_str());
+            // if (result1 == 0) {
+            //     std::cout << "File removed successfully." << std::endl;
+            // } else {
+            //     std::cout << "Failed to remove file." << std::endl;
+            // }
+            sleep(1);
+        }
+    }
+}
+
 void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination, const char* user,int n) {
     bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath,user);
     if (!transferSuccess) {
@@ -869,9 +1028,11 @@ int main(int argc, char *argv[])
 
     std::thread receiverThread2(receiver,session2 ,"moreira2",localFilePath2,remoteFilePath,"dtn://moreira1-VirtualBox/ackRecv");
     std::thread receiverThread1(receiver,session1 ,"moreira1",localFilePath1,remoteFilePath,"dtn://moreira2-VirtualBox/ackRecv");
+    // std::thread receiverThread3(ac_receiver,"Sender/bundleac.bin");
 
     receiverThread2.join();
     receiverThread1.join();
+    // receiverThread3.join();
 
     file.close();
 	disconnect(channel2);
