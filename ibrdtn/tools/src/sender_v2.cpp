@@ -1048,15 +1048,15 @@ int main(int argc, char *argv[])
     WirelessInfo wirelessInfo1;
     WirelessInfo wirelessInfo2;
    
-    const char* host1 = "192.168.0.102";
+    const char* host1 = "192.168.0.103";
     const char* user1 = "root";
     const char* port1 = "22";
-    const char* host2 = "192.168.0.105";
+    const char* host2 = "192.168.0.106";
     const char* user2 = "root";
     const char* port2 = "22";  
 
-    std::string file_destination1 = "dtn://B/dtnRecv";
-    std::string file_destination2 = "dtn://A/dtnRecv";
+    std::string file_destination1 = "dtn://D/dtnRecv";
+    std::string file_destination2 = "dtn://C/dtnRecv";
 	std::string filename;
     
     const std::string localFilePath1 = "Sender/bundle1.bin";
@@ -1168,7 +1168,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel1, "dtnd -i wlan0");
+    rc = ssh_channel_request_exec(channel1, "dtnd -i wlan1");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session1));
         ssh_channel_free(channel1);
@@ -1187,7 +1187,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel2, "dtnd -i wlan0");
+    rc = ssh_channel_request_exec(channel2, "dtnd -i wlan5");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command on the second virtual machine: %s\n", ssh_get_error(session2));
         ssh_channel_free(channel2);
@@ -1227,11 +1227,11 @@ int main(int argc, char *argv[])
         }
         it++;
         // std::cout << "Sequence number = " << nextExpectedBundle << std::endl;
-        wirelessInfo1 = getWirelessInfo(session1,"wlan0",2442);
-        wirelessInfo2 = getWirelessInfo(session2,"wlan0",2442);
+        wirelessInfo1 = getWirelessInfo(session1,"wlan1",2442);
+        wirelessInfo2 = getWirelessInfo(session2,"wlan5",2442);
 
         int condition = decision_unit(wirelessInfo1,wirelessInfo2,datasent,ref.size(),false,50);
-        condition = 1;
+        condition = 4;
 
         if (condition == 0){
             bool last = false;
@@ -1259,7 +1259,7 @@ int main(int argc, char *argv[])
                 // uint64_t seconds = now / 1000;
             }
 
-            sendBundle(session1,localFilePath2,remoteFilePath, "dtn://B/dtnRecv","192.168.0.102","Receiver/bundleack1.bin",nextExpectedBundle);
+            sendBundle(session1,localFilePath2,remoteFilePath, file_destination1 ,host1,"Receiver/bundleack1.bin",nextExpectedBundle);
             if(!ackMap.empty()){
                 if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
                     datasent+=static_cast<int>(b1.getPayloadLength());
@@ -1279,7 +1279,7 @@ int main(int argc, char *argv[])
                 // uint64_t seconds = now / 1000;
             }
 
-            sendBundle(session2,localFilePath1,remoteFilePath,"dtn://A/dtnRecv","192.168.0.105","Receiver/bundleack2.bin",nextExpectedBundle);
+            sendBundle(session2,localFilePath1,remoteFilePath,file_destination2,host2,"Receiver/bundleack2.bin",nextExpectedBundle);
             if(!ackMap.empty()){
                 if((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())){
                     datasent+=static_cast<int>(b1.getPayloadLength());
@@ -1297,8 +1297,8 @@ int main(int argc, char *argv[])
             b2 = processBundle(ref1,localFilePath2,addr_source,addr_dest,nextExpectedBundle);
 
             //sender threads
-            std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, "dtn://A/dtnRecv","192.168.0.105","Receiver/bundleack2.bin",nextExpectedBundle);
-            std::thread senderThread1(sendBundle,session1,localFilePath2,remoteFilePath, "dtn://B/dtnRecv","192.168.0.102","Receiver/bundleack1.bin",nextExpectedBundle);
+            std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, file_destination2,host2,"Receiver/bundleack2.bin",nextExpectedBundle);
+            std::thread senderThread1(sendBundle,session1,localFilePath2,remoteFilePath, file_destination1,host1,"Receiver/bundleack1.bin",nextExpectedBundle);
 
             senderThread2.join();
             senderThread1.join();
@@ -1333,14 +1333,14 @@ int main(int argc, char *argv[])
             
             //sender threads
             if(ref1.size() >= 70268 ){
-                std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, "dtn://A/dtnRecv","192.168.0.105","Receiver/bundleack2.bin",temp);
-                std::thread senderThread1(sendBundle,session1,localFilePath2,remoteFilePath, "dtn://B/dtnRecv","192.168.0.102","Receiver/bundleack1.bin",nextExpectedBundle);
+                std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, file_destination2,host2,"Receiver/bundleack2.bin",temp);
+                std::thread senderThread1(sendBundle,session1,localFilePath2,remoteFilePath, file_destination1,host1,"Receiver/bundleack1.bin",nextExpectedBundle);
 
                 senderThread1.join();
                 senderThread2.join();
 
             }else{
-                std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, "dtn://A/dtnRecv","192.168.0.105","Receiver/bundleack2.bin",temp);
+                std::thread senderThread2(sendBundle,session2,localFilePath1,remoteFilePath, file_destination2,host2,"Receiver/bundleack2.bin",temp);
                 senderThread2.join();
             }
 

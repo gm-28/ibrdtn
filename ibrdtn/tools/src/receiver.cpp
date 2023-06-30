@@ -167,7 +167,7 @@ bool transferFileFromRemote(ssh_session session, const std::string& remoteFilePa
     // Create a local file for writing
     std::ofstream localFile(localFilePath, std::ios::binary);
     if (!localFile.is_open()) {
-        std::cerr << user << "Error creating local file: "<< localFilePath.c_str() << std::endl;
+        std::cerr << user << ": Error creating local file: "<< localFilePath.c_str() << std::endl;
         sftp_close(remoteFile);
         sftp_free(sftp);
         return false;
@@ -803,7 +803,8 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             }
             {
                 std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
-                if(lastbundlefound && bundleMap.size() == lastsequencenumber-1 || lastsequencenumber == 0){
+                // std::cout << "Map size: " << bundleMap.size() << std::endl;
+                if(lastbundlefound && bundleMap.size() == lastsequencenumber || lastsequencenumber == 0){
                     now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                     //uint64_t seconds = now / 1000;
                     // std::cout << timeSinceEpochMillisec() << std::endl;
@@ -913,13 +914,15 @@ int main(int argc, char *argv[])
 
 	std::string filename;
 	dtn::data::EID group;
-    const char* host1 = "192.168.0.102";
+    const char* host1 = "192.168.0.103";
     const char* user1 = "root";
     const char* port1 = "22";
-    const char* host2 = "192.168.0.105";
+    const char* host2 = "192.168.0.106";
     const char* user2 = "root";
     const char* port2 = "22";
 
+    std::string file_destination1 = "dtn://D/ackRecv";
+    std::string file_destination2 = "dtn://C/ackRecv";
     // Check if a filename argument is provided
     if (argc >= 2)
     {
@@ -1026,8 +1029,8 @@ int main(int argc, char *argv[])
     const char* localFilePath1 = "Receiver/bundle1.bin";
     const char* localFilePath2 = "Receiver/bundle2.bin";
 
-    std::thread receiverThread2(receiver,session2 ,"192.168.0.105",localFilePath2,remoteFilePath,"dtn://A/ackRecv");
-    std::thread receiverThread1(receiver,session1 ,"192.168.0.102",localFilePath1,remoteFilePath,"dtn://B/ackRecv");
+    std::thread receiverThread2(receiver,session2 ,host2,localFilePath2,remoteFilePath,file_destination2);
+    std::thread receiverThread1(receiver,session1 ,host1,localFilePath1,remoteFilePath,file_destination1);
     // std::thread receiverThread3(ac_receiver,"Sender/bundleac.bin");
 
     receiverThread2.join();
