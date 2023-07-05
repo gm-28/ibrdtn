@@ -18,12 +18,15 @@ shell = gw.agentForService('org.arl.fjage.shell.Services.SHELL')
 
 req = GetFileReq(recipient=shell, filename=remote_file_name)
 rsp = gw.request(req, timeout)
-first = rsp.contents[0]
-list = rsp.contents
-gw.close()
 
-unsigned_int_list = [2**8 + element  if element < 0 else element for element in list]   
-byte_array = bytes(unsigned_int_list) 
+if hasattr(rsp, 'contents'):   
+    list = rsp.contents
+    gw.close()
 
-with open(local_file_name, 'wb') as file:
-    file.write(byte_array)
+    unsigned_int_list = [2**8 + element  if element < 0 else element for element in list]   
+    byte_array = bytes(unsigned_int_list) 
+    with open(local_file_name, 'wb') as file:
+        file.write(byte_array)
+        
+    sys.exit(1)
+sys.exit(0)

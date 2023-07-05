@@ -44,12 +44,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <libssh/libssh.h>
+#include <cstdlib>
 
 
 void print_help()
 {
-	std::cout << "-- dtnrecv (IBR-DTN) --" << std::endl
+	std::cout << "-- dtnrecv (IBR-DTN) updated --" << std::endl
 			<< "Syntax: dtnrecv [options]"  << std::endl << std::endl
 			<< "* optional parameters *" << std::endl
 			<< " -h|--help        Display this text" << std::endl
@@ -87,21 +87,18 @@ void term(int signal)
 }
 
 bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundle& bundle) {
-    // Open the input file stream
-    std::ifstream inputFile(localFilePath, std::ios::binary);
+    std::ifstream inputFile(localFilePath.c_str(), std::ios::binary);
     if (!inputFile.is_open()) {
         std::cerr << "Error opening input file" << std::endl;
         return false;
     }
 
     try {
-        // Create a DefaultDeserializer object with the input stream
         dtn::data::DefaultDeserializer deserializer(inputFile);
 
         // Deserialize the bundle from the file
         deserializer >> bundle;
 
-        // Close the input file stream
         inputFile.close();
 
         return true;
@@ -127,6 +124,7 @@ int main(int argc, char *argv[])
 	sighandler.initialize();
 
 	int ret = EXIT_SUCCESS;
+	std::string reg ="";
 	std::string filename = "";
 	std::string name = "filetransfer";
 	dtn::data::EID group;
@@ -179,6 +177,11 @@ int main(int argc, char *argv[])
 		if (arg == "--count" && argc > i) 
 		{
 			count = atoi(argv[i + 1]);
+		}
+
+		if (arg == "--reg" && argc > i) 
+		{
+			reg = atoi(argv[i + 1]);
 		}
 
 		if (arg == "-U" && argc > i)
@@ -280,13 +283,13 @@ int main(int argc, char *argv[])
 		dtn::data::Bundle b1;
 		deserializeBundleFromFile("ibrdtn/ibrdtn/tools/src/Receiver/bundle.bin",b1);
 		dtn::data::BundleID& id = b1;
-		int sequence = std::stoi(id.sequencenumber.toString().c_str());
+		int sequence = std::atoi(id.sequencenumber.toString().c_str());
 		std::cout << "Sequence of transferred file " << sequencenumber << " Timestamp " << timestamp << " Source " << sourceeid << "\n";
 
 		// Shutdown the client connection.
 		client.close();
 
-    	std::string command = "python3 ibrdtn/ibrdtn/tools/src/removebundle.py " + timestamp + " " + sequencenumber + " " + sourceeid;
+    	std::string command = "python ibrdtn/ibrdtn/tools/src/removebundle.py " + timestamp + " " + sequencenumber + " " + sourceeid + " " + reg;
     	int result = system(command.c_str()); 		
 		if (result == 0){
 			std::cout << "Bundle freed successfully!"<< std::endl;

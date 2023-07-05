@@ -554,18 +554,31 @@ void createChunkFile(int sequenceNumber, const ibrcommon::BLOB::Reference& chunk
         file << chunkStream->rdbuf();
 
         file.close();
-        // std::cout << "Chunk file created: " << filename << std::endl;
+        std::cout << "Chunk file created: " << filename << std::endl;
     } else {
         std::cerr << "Failed to create chunk file: " << filename << std::endl;
     }
 }
 
-void ac_receiver(const std::string& filename){
-    std::string filepath = "/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin";
+void ac_downloader(std::string src_ip, std::string src_port, std::string dest_node, std::string timeout, std::string remote_file ,std::string local_file)
+{
+    std::string filepathack = "/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin";
+    std::string command = "python3 download_file.py " + src_ip + " " + src_port + " " + dest_node + " " + timeout + " " + remote_file + " " + local_file;
+    int result = ::system(command.c_str());
+    if (result != 0)
+    {
+        std::cout << "Error sending through ac" << std::endl;
+    }
+}
+
+void ac_receiver(std::string src_ip, std::string src_port, std::string dest_node, int timeoutSeconds, std::string remote_filepath ,std::string local_filepath){
     while(!terminateFlag){
-        std::ifstream file(filepath);
+        std::string command = "python3 download_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutSeconds) + " " + remote_filepath + " " + local_filepath;
+        std::cout << command << std::endl;
+        std::ifstream file(local_filepath);
         if(file.good()){
-            auto result = removeHeaderFlags("/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin");
+            std::cout << "File is good" << std::endl;
+            auto result = removeHeaderFlags(local_filepath);
             int sequenceNumber = std::get<0>(result);
             bool isLastChunk = std::get<1>(result);
 
@@ -588,7 +601,7 @@ void ac_receiver(const std::string& filename){
             id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
             if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
                 {
-                    std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
+                    std::lock_guard<std::mutex> lock(bundleMapMutex);
                     lastbundlefound = true;
                     lastsequencenumber = sequenceNumber;
                     // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
@@ -599,38 +612,41 @@ void ac_receiver(const std::string& filename){
             if (sequenceNumber == nextExpectedBundle) {
                 writeToFile(sequenceNumber, bundle,"ac");
             } else {
-                // Store the bundle in the map or update existing entry
                 {
-                    std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
+                    std::lock_guard<std::mutex> lock(bundleMapMutex);// Store the bundle in the map or update existing entry
                     bundleMap[sequenceNumber] = bundle;
                 } // The lock is automatically released when lock goes out of scope
             }
             
-            std::string filenameac = "Sender/ack.txt";
+            std::string filenameac = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
             ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
 
-            createChunkFile(sequenceNumber, ref, "/home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin", false ,true); //overhead of 4 bytes because of int
+            createChunkFile(sequenceNumber, ref, "/home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin", false ,true); //overhead of 5 bytes
 
-            std::string src_ip = "192.168.1.70";
-            std::string src_port = "1102";
-            std::string dest_node = "232";
-            std::string timeout = "10000";
-            std::string filenameack = "bundleack.bin";
-        
-            std::string command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + timeout + " " + filenameack;
-            int result1 = ::system(command.c_str()); 		
+            std::string filenameack = "Sender/bundleack.bin";
+            std::string command = "python3 upload_file.py " + src_ip+ " " + src_port + " " + std::to_string(timeoutSeconds) + " " + filenameac + " bundleack.bin";
+            std::cout << command << std::endl;
+            int result1 = ::system(command.c_str());
             if (result1 != 0){
-                std::cout << "Error sending through ac"<< std::endl;
-            }
-
-            sleep(1);
-            std::string command2 = "rm /home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin";
-            result1 = std::system(command2.c_str());
-            if (result1 == 0) {
-                std::cout << "File removed successfully." << std::endl;
+                std::cout << "Error uploading" << std::endl;
             } else {
-                std::cout << "Failed to remove file." << std::endl;
+                command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutSeconds) + " bundleack.bin";
+                std::cout << command << std::endl;
+                result1 = ::system(command.c_str()); 		
+                if (result1 != 0){
+                    std::cout << "Error sending through ac"<< std::endl;
+                }
+
+                std::string command2 = "rm /home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin";
+                result1 = std::system(command2.c_str());
+                if (result1 == 0) {
+                    std::cout << "File removed successfully." << std::endl;
+                } else {
+                    std::cout << "Failed to remove file." << std::endl;
+                }
             }
+        }else{
+            std::cout << "File is bad" << std::endl;
         }
     }
 }
@@ -643,7 +659,7 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
     }
 
     std::string command = "dtnsend " + destination + " " + remoteFilePath;
-    // std::cout << user << ": " << command << std::endl;
+    std::cout << user << ": " << command << std::endl;
 
     ssh_channel channel_cmd = ssh_channel_new(session);
     int rc = ssh_channel_open_session(channel_cmd);
@@ -827,7 +843,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
                 } 
             }
 
-            dtn::data::Bundle ack = processACKBundle("Sender/bundleAck.bin",bundle.destination,bundle.source,std::atoi(bundle.sequencenumber.toString().c_str()));
+            dtn::data::Bundle ack = processACKBundle("/root/ibrdtn-repo/ibrdtn/tools/src/Sender/bundleACK.bin",bundle.destination,bundle.source,std::atoi(bundle.sequencenumber.toString().c_str()));
             // std::__cxx11::string source = bundle.source.getString() + "/ackRecv";
             sendBundle(session,"Sender/bundleAck.bin","/root/ibrdtn-repo/ibrdtn/tools/src/Sender/bundleACK.bin",ackdestination,user, std::atoi(bundle.sequencenumber.toString().c_str()) );
         }
@@ -914,15 +930,39 @@ int main(int argc, char *argv[])
 
 	std::string filename;
 	dtn::data::EID group;
-    const char* host1 = "192.168.0.103";
-    const char* user1 = "root";
-    const char* port1 = "22";
-    const char* host2 = "192.168.0.106";
-    const char* user2 = "root";
-    const char* port2 = "22";
+    const char *host1 = "192.168.0.102";
+    const char *user1 = "root";
+    const char *port1 = "22";
+    const char *host2 = "192.168.0.105";
+    const char *user2 = "root";
+    const char *port2 = "22";
+    // const char* host1 = "192.168.0.103";
+    // const char* user1 = "root";
+    // const char* port1 = "22";
+    // const char* host2 = "192.168.0.106";
+    // const char* user2 = "root";
+    // const char* port2 = "22";
 
-    std::string file_destination1 = "dtn://D/ackRecv";
-    std::string file_destination2 = "dtn://C/ackRecv";
+    std::string file_destination1 = "dtn://B/ackRecv";
+    std::string file_destination2 = "dtn://A/ackRecv";
+    // std::string file_destination1 = "dtn://D/ackRecv";
+    // std::string file_destination2 = "dtn://C/ackRecv";
+
+    //RF options
+    const char* remoteFilePath = "/root/ibrdtn-repo/ibrdtn/tools/src/Receiver/bundle.bin";
+    const char* localFilePath1 = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle1.bin";
+    const char* localFilePath2 = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle2.bin";
+    
+
+    // AC options
+    std::string src_ip = "192.168.0.142";
+    std::string src_port = "1102";
+    std::string dest_node = "232";
+    int timeout_ac = 10;
+    std::string remote_filepath = "scripts/bundleac.bin";
+    std::string local_filepath = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundleac.bin";
+
+
     // Check if a filename argument is provided
     if (argc >= 2)
     {
@@ -993,7 +1033,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel1, "dtnd -i enp0s3");
+    rc = ssh_channel_request_exec(channel1, "dtnd -i wlan0");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
         ssh_channel_free(channel1);
@@ -1012,7 +1052,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel2, "dtnd -i enp0s3");
+    rc = ssh_channel_request_exec(channel2, "dtnd -i wlan0");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
         ssh_channel_free(channel2);
@@ -1021,21 +1061,19 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-	std::cout << "Wait for incoming file..." << std::endl;
 	file.open(filename.c_str(), std::ios::in|std::ios::out|std::ios::binary|std::ios::trunc);
 	file.exceptions(std::ios::badbit | std::ios::eofbit);
 
-    const char* remoteFilePath = "/root/ibrdtn-repo/ibrdtn/tools/src/Receiver/bundle.bin";
-    const char* localFilePath1 = "Receiver/bundle1.bin";
-    const char* localFilePath2 = "Receiver/bundle2.bin";
+	
+    std::cout << "Wait for incoming file..." << std::endl;
 
     std::thread receiverThread2(receiver,session2 ,host2,localFilePath2,remoteFilePath,file_destination2);
     std::thread receiverThread1(receiver,session1 ,host1,localFilePath1,remoteFilePath,file_destination1);
-    // std::thread receiverThread3(ac_receiver,"Sender/bundleac.bin");
+    //std::thread receiverThread3(ac_receiver,src_ip,src_port, dest_node, timeout_ac, remote_filepath, local_filepath);
 
     receiverThread2.join();
     receiverThread1.join();
-    // receiverThread3.join();
+    //receiverThread3.join();
 
     file.close();
 	disconnect(channel2);
