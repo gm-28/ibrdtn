@@ -1418,8 +1418,7 @@ int main(int argc, char *argv[])
     dtn::data::Bundle b2;
     ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
 
-    while (datasent < ref.size())
-    {
+    while (datasent < ref.size()){
         nextExpectedBundle = findnextsequencenumber(0);
         if (nextExpectedBundle == 0)
         {
