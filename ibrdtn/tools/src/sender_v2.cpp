@@ -203,8 +203,7 @@ WirelessInfo getWirelessInfo(ssh_session session, const std::string &interface, 
 
     std::string result = executeRemoteCommand(session, command.str());
 
-    if (result.empty())
-    {
+    if (result.empty()){
         std::cerr << "No wireless information found for interface " << interface << "." << std::endl;
         return {};
     }
@@ -240,6 +239,8 @@ WirelessInfo getWirelessInfo(ssh_session session, const std::string &interface, 
 
 int convertBitrateToBytes(const std::string &bitrateString)
 {
+    std::cout <<" Bitrate: " << bitrateString << std::endl;
+
     std::istringstream iss(bitrateString);
     double bitrateValue = 0.0;
     std::string unit;
@@ -255,8 +256,10 @@ int convertBitrateToBytes(const std::string &bitrateString)
             bitrateValue *= 1000 / 8; // Convert from Kilobits to Bytes
         }
         // Add more conversions for other units if needed
+        int tmp = bitrateValue;
+        std::cout <<" Byterate: " << tmp << std::endl;
 
-        return bitrateValue;
+        return tmp;
     }
 
     // Handle invalid bitrate string
@@ -510,9 +513,9 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
 {
     int rc;
     bool terminateFlag = false;
+    auto startTime = std::chrono::steady_clock::now();
 
-    while (!terminateFlag)
-    {
+    while (!terminateFlag){
         // Execute the receiver command in a loop
         // Create a channel for executing the receiver command
         ssh_channel channel = ssh_channel_new(session);
@@ -520,6 +523,7 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
         if (rc != SSH_OK)
         {
             fprintf(stderr, "Failed to open SSH channel 1: %s\n", ssh_get_error(session));
+            std::cout << user << ": Error " << std::endl;
             disconnect(channel);
             return;
         }
@@ -536,12 +540,12 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
 
         ssh_channel_set_blocking(channel, 0);
         int exitStatus = ssh_channel_get_exit_status(channel);
-
-        auto startTime = std::chrono::steady_clock::now();
         while (exitStatus == -1)
         {
             if (ackMap[nextExpectedBundle] == true)
             {
+                ssh_channel_set_blocking(channel, 1);
+                disconnect(channel);
                 return;
             }
             exitStatus = ssh_channel_get_exit_status(channel);
@@ -553,6 +557,7 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
             {
                 // std::cout << user << ": Timeout reached" << std::endl;
                 ssh_channel_set_blocking(channel, 1);
+                disconnect(channel);
                 return;
             }
         }
@@ -582,8 +587,7 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
             snprintf(command2, sizeof(command2), "rm -f %s", remoteFilePath.c_str());
 
             rc = ssh_channel_request_exec(channel2, command2);
-            if (rc != SSH_OK)
-            {
+            if (rc != SSH_OK){
                 fprintf(stderr, "Failed to delete file: %s\n", ssh_get_error(session));
                 ssh_channel_free(channel2);
                 return;
@@ -611,10 +615,12 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
             deserializeBundleFromFile(localFilePath, bundle);
 
             dtn::data::BundleID &id = bundle;
-            // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
             int sequencenumber = std::stoi(id.sequencenumber.toString());
-            if ((bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) == true) && (sequencenumber == nextExpectedBundle))
-            {
+
+            std::cout << user << ": Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) << " Sequence number: "<< sequencenumber << " Expected sequence number: " << nextExpectedBundle << std::endl;
+            std::cout << std::stoi(id.sequencenumber.toString()) << std::endl;
+            //if ((bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) == 1) && (sequencenumber == nextExpectedBundle) && ackMap[sequencenumber] != true )
+            if((bundle.get(dtn::data::PrimaryBlock::ACK_BUNDLE) == true) && (sequencenumber == nextExpectedBundle)){
                 {
                     std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
                     ackMap[sequencenumber] = true;
@@ -622,14 +628,14 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
                     std::cout << user << ": Ack of " << id.sequencenumber.toString().c_str() << " received." << std::endl;
                 }
             }
-
-            disconnect(channel);
         }
+        disconnect(channel);
+
     }
     return;
 }
 
-void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination, const char *user, const char *ackdest, int nextExpectedBundle, int timeout_rf)
+void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination, const char *user, const std::string ackdest, int nextExpectedBundle, int timeout_rf)
 {
     bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath, user);
     if (!transferSuccess)
@@ -901,6 +907,7 @@ dtn::data::Bundle processBundle(ibrcommon::BLOB::Reference ref, const std::strin
 
     dtn::data::BundleID &id = b;
     id.sequencenumber.fromString(std::to_string(nextExpectedBundle).c_str());
+    std::cout << "Bundle that was serialized: " << b.sequencenumber.toString().c_str() << std::endl;
 
     // Open the output file stream
     std::ofstream outputFile(localFilePath, std::ios::binary);
@@ -980,13 +987,13 @@ int findnextsequencenumber(int start_counter)
     int counter = start_counter;
     if (!ackMap.empty())
     {
-        bool keyFound = (ackMap.find(counter) != ackMap.end());
+        bool keyFound = (ackMap.find(counter) != ackMap.end() && ackMap[counter] != false);
         while (keyFound)
         {
-            // std::cout << "Counter " << counter << std::endl;
             counter++;
-            keyFound = (ackMap.find(counter) != ackMap.end());
+            keyFound = (ackMap.find(counter) != ackMap.end() && ackMap[counter] != false);
         }
+        std::cout << "Next sequence number: "  << counter << " ACK Received? "<< ackMap[counter] << std::endl;
     }
     return counter;
 }
@@ -1017,17 +1024,21 @@ int decision_unit(WirelessInfo wirelessInfo1, WirelessInfo wirelessInfo2, int da
     wirelessInfo1.state = state_update(wirelessInfo1.snr, rf_low_th_24ghz, rf_high_th_24ghz);
     wirelessInfo2.state = state_update(wirelessInfo2.snr, rf_low_th_5ghz, rf_high_th_5ghz);
 
-    if (ac_state)
+    if (!ac_state)
     {
         if (wirelessInfo1.state == ACTIVE && wirelessInfo2.state == OFF) // rf1
         {
             channelsize1 = convertBitrateToBytes(wirelessInfo1.bitRate);
             ret = 1;
-            
+            std::cout <<" Channelsize: " << channelsize1 << std::endl;
+
             if (channelsize1 > 250000)
             {
                 channelsize1 = 250000;
             }
+            std::cout <<" Channelsize: " << channelsize1 << std::endl;
+
+            
         }
         else if (wirelessInfo1.state == OFF && wirelessInfo2.state == ACTIVE) // rf2;
         {
@@ -1038,6 +1049,7 @@ int decision_unit(WirelessInfo wirelessInfo1, WirelessInfo wirelessInfo2, int da
             {
                 channelsize2 = 250000;
             }
+            std::cout <<" Channelsize: " << channelsize2 << std::endl;
         }
         else if (wirelessInfo1.state == HANDOVER && wirelessInfo2.state == HANDOVER)
         {
@@ -1257,10 +1269,8 @@ int main(int argc, char *argv[])
 
     int timeout_rf = 2;
 
-    // std::string file_destination1 = "dtn://D/dtnRecv";
-    // std::string file_destination2 = "dtn://C/dtnRecv";
-    std::string file_destination1 = "dtn://B/dtnRecv";
-    std::string file_destination2 = "dtn://A/dtnRecv";
+    std::string file_destination1 = "dtn://C/dtnRecv";
+    std::string file_destination2 = "dtn://D/dtnRecv";
     std::string filename;
 
     const std::string localFilePath1 = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundle1.bin";
@@ -1396,7 +1406,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
     print_rf_info(getWirelessInfo(session1, "wlan0", 2442));
-    print_rf_info(getWirelessInfo(session2, "wlan0", 2442));
+    print_rf_info(getWirelessInfo(session2, "wlan0", 5180));
 
     sleep(1);
 
@@ -1417,9 +1427,10 @@ int main(int argc, char *argv[])
         }
         // std::cout << "Sequence number = " << nextExpectedBundle << std::endl;
         wirelessInfo1 = getWirelessInfo(session1, "wlan0", 2442);
-        wirelessInfo2 = getWirelessInfo(session2, "wlan0", 2442);
+        wirelessInfo2 = getWirelessInfo(session2, "wlan0", 5180);
         int condition = decision_unit(wirelessInfo1, wirelessInfo2, datasent, ref.size(), false, ac_mtu);
-
+        condition = 3;
+        channelsize2 = 250000;
         if (condition == 0)
         {
             bool last = false;
@@ -1451,6 +1462,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 1)
         {
+            std::cout << "HEre" << std::endl;
             ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 250000, nextExpectedBundle);
             // std::cout <<host1 << ": Size: " << channelsize1 << std::endl;
             b1 = processBundle(ref1, localFilePath2, addr_source, addr_dest, nextExpectedBundle);
@@ -1460,13 +1472,13 @@ int main(int argc, char *argv[])
                 // uint64_t seconds = now / 1000;
             }
 
-            sendBundle(session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, timeout_rf);
+            sendBundle(session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, 5);
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true)
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
-                    // remainingSize -= static_cast<int>(b1.getPayloadLength());
+                    std::cout<< "Data sent: " << datasent << std::endl;
                 }
             }
 
@@ -1476,7 +1488,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 2)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, channelsize2, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 50000, nextExpectedBundle);
 
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
@@ -1488,7 +1500,7 @@ int main(int argc, char *argv[])
             sendBundle(session2, localFilePath1, remoteFilePath, file_destination2, host2, "Receiver/bundleack2.bin", nextExpectedBundle, timeout_rf);
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true)
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // remainingSize -= static_cast<int>(b1.getPayloadLength());
@@ -1501,7 +1513,14 @@ int main(int argc, char *argv[])
         }
         else if (condition == 3)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, channelsize1, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 50000, nextExpectedBundle);
+
+            b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
+            if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
+            {
+                now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                // uint64_t seconds = now / 1000;
+            }
 
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             b2 = processBundle(ref1, localFilePath2, addr_source, addr_dest, nextExpectedBundle);
@@ -1515,7 +1534,7 @@ int main(int argc, char *argv[])
 
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true)
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // remainingSize -= static_cast<int>(b1.getPayloadLength());
@@ -1528,7 +1547,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 4)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 70268, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 250000, nextExpectedBundle);
             int temp = nextExpectedBundle;
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             std::cout << "HERE" << std::endl;
@@ -1537,9 +1556,9 @@ int main(int argc, char *argv[])
             // std::cout << "Sequence of 2nd number = " << nextExpectedBundle << std::endl;
 
             // mudar o tamanho na condição
-            if (ref1.size() >= 70268)
+            if (ref1.size() >= 250000)
             {
-                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref, 70260, nextExpectedBundle);
+                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref, 250000, nextExpectedBundle);
                 b2 = processBundle(ref2, localFilePath2, addr_source, addr_dest, nextExpectedBundle);
             }
 
@@ -1547,7 +1566,7 @@ int main(int argc, char *argv[])
             // uint64_t seconds = now / 1000;
 
             // sender threads
-            if (ref1.size() >= 70268)
+            if (ref1.size() >= 250000)
             {
                 std::thread senderThread2(sendBundle, session2, localFilePath1, remoteFilePath, file_destination2, host2, "Receiver/bundleack2.bin", temp, timeout_rf);
                 std::thread senderThread1(sendBundle, session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, timeout_rf);
@@ -1570,7 +1589,7 @@ int main(int argc, char *argv[])
 
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true )
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // std::cout << "ACK " << std::atoi(b1.sequencenumber.toString().c_str()) << std::endl;
@@ -1578,7 +1597,7 @@ int main(int argc, char *argv[])
             }
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b2.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b2.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b2.sequencenumber.toString().c_str())] == true)
                 {
                     datasent += static_cast<int>(b2.getPayloadLength());
                     // std::cout << "ACK " << std::atoi(b2.sequencenumber.toString().c_str()) << std::endl;
@@ -1618,7 +1637,7 @@ int main(int argc, char *argv[])
 
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end())&& ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true)
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // remainingSize -= static_cast<int>(b1.getPayloadLength());
@@ -1658,7 +1677,7 @@ int main(int argc, char *argv[])
 
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true )
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // remainingSize -= static_cast<int>(b1.getPayloadLength());
@@ -1698,7 +1717,7 @@ int main(int argc, char *argv[])
 
             if (!ackMap.empty())
             {
-                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()))
+                if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true )
                 {
                     datasent += static_cast<int>(b1.getPayloadLength());
                     // remainingSize -= static_cast<int>(b1.getPayloadLength());
