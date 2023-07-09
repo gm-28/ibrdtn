@@ -46,40 +46,6 @@ std::mutex stopMutex;
 std::time_t currentTime;
 uint64_t now;
 
-dtn::data::Bundle processACKBundle( const std::string& localFilePath, EID addr_src , EID addr_dest, int nextExpectedBundle) {
-    // create a bundle fro the file
-    dtn::data::Bundle b;
-
-    b.source = addr_src;
-
-    b.destination = addr_dest;
-
-    // set the lifetime
-    b.lifetime = 3600;
-
-    b.set(dtn::data::PrimaryBlock::ACK_BUNDLE, true); 
-	std::string filename = "Sender/ack.txt";
-    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
-    // add payload block with the references
-    b.push_back(ref);
-
-    dtn::data::BundleID& id = b;
-    id.sequencenumber.fromString(std::to_string(nextExpectedBundle).c_str());
-
-    // Open the output file stream
-    std::ofstream outputFile(localFilePath, std::ios::binary);
-    // Create a DefaultSerializer object with the output stream
-    dtn::data::DefaultSerializer serializer(outputFile);
-
-    // Serialize the bundle and write it to the file
-    serializer << b;
-    
-    // Close the output file stream
-    outputFile.close();
-
-    return b;
-}
-
 void print_help()
 {
 	std::cout << "-- Receiver --" << std::endl
@@ -97,6 +63,41 @@ void print_help()
             << " -Host2           Set the second host name" << std::endl
             << " -User2           Set the second user name" << std::endl
 			<< " -U2 <socket>     Connect to the first host through this socket " << std::endl;
+}
+
+dtn::data::Bundle processACKBundle( const std::string& localFilePath, EID addr_src , EID addr_dest, int nextExpectedBundle) {
+    std::string filename = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
+
+    dtn::data::Bundle b;
+
+    b.source = addr_src;
+
+    b.destination = addr_dest;
+
+    // set the lifetime
+    b.lifetime = 3600;
+
+    b.set(dtn::data::PrimaryBlock::ACK_BUNDLE, true); 
+    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filename);
+    // add payload block with the references
+    b.push_back(ref);
+
+    dtn::data::BundleID &id = b;
+    id.sequencenumber.fromString(std::to_string(nextExpectedBundle).c_str());
+    std::cout << "Bundle that was serialized: " << b.sequencenumber.toString().c_str() << std::endl;
+
+    // Open the output file stream
+    std::ofstream outputFile(localFilePath, std::ios::binary);
+    // Create a DefaultSerializer object with the output stream
+    dtn::data::DefaultSerializer serializer(outputFile);
+
+    // Serialize the bundle and write it to the file
+    serializer << b;
+
+    // Close the output file stream
+    outputFile.close();
+
+    return b;
 }
 
 void disconnect(ssh_channel channel) {
@@ -132,80 +133,45 @@ bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundl
     }
 }
 
-/**
- * Transfer a file from a remote server to the local machine using SFTP.
- *
- * @param session         The SSH session established with the remote server.
- * @param remoteFilePath  The path to the remote file on the server.
- * @param localFilePath   The path to the local file to save the transferred file.
- * @return                True if the file transfer is successful, false otherwise.
- */
-bool transferFileFromRemote(ssh_session session, const std::string& remoteFilePath, const std::string& localFilePath,const char* user) {
-    // Create an SFTP session
-    sftp_session sftp = sftp_new(session);
-    if (sftp == nullptr) {
-        std::cerr << user << "Error creating SFTP session: " << ssh_get_error(session) << std::endl;
+bool transferFileToRemote(const std::string& localFilePath, const std::string& remoteFilePath, const char* user) {
+    std::string scpCommand = "scp " + localFilePath + " root@" + user + ":" + remoteFilePath;
+    // Rest of the function implementation remains the same.
+
+    // Execute the scp command
+    int status = std::system(scpCommand.c_str());
+
+    // Check the exit status of the scp command
+    if (status == 0)
+    {
+        std::cout << "File copied successfully to remote server." << std::endl;
+        return true;
+    }
+    else
+    {
+        std::cerr << "Failed to copy file to remote server." << std::endl;
         return false;
     }
+}
 
-    // Initialize the SFTP session
-    int rc = sftp_init(sftp);
-    if (rc != SSH_OK) {
-        std::cerr << user << ": Error opening remote file: " <<  remoteFilePath.c_str() << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
+bool transferFileFromRemote(const std::string& remoteFilePath, const std::string& localFilePath, const char* user)
+{
+    std::string scpCommand = "scp root@" + std::string(user) + ":" + remoteFilePath + " " + localFilePath;
+    // Rest of the function implementation remains the same.
+
+    // Execute the scp command
+    int status = std::system(scpCommand.c_str());
+
+    // Check the exit status of the scp command
+    if (status == 0)
+    {
+        std::cout << "Files copied successfully from remote server." << std::endl;
+        return true;
+    }
+    else
+    {
+        std::cerr << "Failed to copy files from remote server." << std::endl;
         return false;
     }
-
-    // Open the remote file for reading
-    sftp_file remoteFile = sftp_open(sftp, remoteFilePath.c_str(), O_RDONLY, 0);
-    if (remoteFile == nullptr) {
-        std::cerr << user << ": Error opening remote file: " <<  remoteFilePath.c_str() << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        return false;
-    }
-
-    // Create a local file for writing
-    std::ofstream localFile(localFilePath, std::ios::binary);
-    if (!localFile.is_open()) {
-        std::cerr << user << ": Error creating local file: "<< localFilePath.c_str() << std::endl;
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        return false;
-    }
-
-    sftp_attributes attrs = sftp_fstat(remoteFile);
-    if (!attrs) {
-        std::cerr << "Error getting file attributes: " << ssh_get_error(session) << std::endl;
-        localFile.close();
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        return false;
-    }
-
-    // Read the remote file data and write it to the local file
-    const int bufferSize = attrs->size;
-    // const int bufferSize = 1024;
-    // std::cout << bufferSize << std::endl;
-    char buffer[bufferSize];
-    ssize_t bytesRead;
-    do {
-        bytesRead = sftp_read(remoteFile, buffer, bufferSize);
-        if (bytesRead > 0) {
-            localFile.write(buffer, bytesRead);
-        } else if (bytesRead < 0) {
-            std::cerr << "Error reading remote file: " << ssh_get_error(session) << std::endl;
-            localFile.close();
-            sftp_close(remoteFile);
-            sftp_free(sftp);
-            return false;
-        }
-    } while (bytesRead > 0);
-
-    // Close the local file, remote file, and free the SFTP session
-    localFile.close();
-    sftp_close(remoteFile);
-    sftp_free(sftp);
-    return true;
 }
 
 bool checkRemoteFileExists(ssh_session session, const char* remoteFilePath) {
@@ -319,79 +285,6 @@ bool serializeBundleToFile(const std::string filename, const dtn::data::Bundle b
         outputFile.close();
         return false;
     }
-}
-
-/**
- * Transfer a file to a remote server using SFTP.
- * 
- * @param session         The SSH session established with the remote server.
- * @param localFilePath   The path to the local file to transfer.
- * @param remoteFilePath  The path to the remote file on the server.
- * @return                True if the file transfer is successful, false otherwise.
- */
-bool transferFileToRemote(ssh_session session, const std::string& localFilePath, const std::string& remoteFilePath,const char* user) {
-    // Open the file for reading
-    std::ifstream file(localFilePath, std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Error opening local file" << std::endl;
-        return false;
-    }
-
-    // Get the size of the file
-    file.seekg(0, std::ios::end);
-    std::streampos fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    // Allocate a buffer to store the file data
-    char* buffer = new char[fileSize];
-
-    // Read the file data into the buffer
-    file.read(buffer, fileSize);
-    file.close();
-
-    // Create an SFTP session
-    sftp_session sftp = sftp_new(session);
-    if (sftp == nullptr) {
-        std::cerr << "Error creating SFTP session: " << ssh_get_error(session) << std::endl;
-        delete[] buffer;
-        return false;
-    }
-
-    // Initialize the SFTP session
-    int rc = sftp_init(sftp);
-    if (rc != SSH_OK) {
-        std::cerr << "Error initializing SFTP session: " << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Open a file on the remote server for writing
-    sftp_file remoteFile = sftp_open(sftp, remoteFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    if (remoteFile == nullptr) {
-        std::cerr << "Error opening remote file: " << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Write the file data to the remote file
-    rc = sftp_write(remoteFile, buffer, fileSize);
-    if (rc < 0) {
-        std::cerr << "Error writing to remote file: " << ssh_get_error(session) << std::endl;
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Close the remote file and free the SFTP session
-    sftp_close(remoteFile);
-    sftp_free(sftp);
-    delete[] buffer;
-
-
-    return true;
 }
 
 dtn::data::Bundle processBundle(const std::string& localFilePath, EID addr_src , EID addr_dest, int nextExpectedBundle) {
@@ -562,7 +455,7 @@ void createChunkFile(int sequenceNumber, const ibrcommon::BLOB::Reference& chunk
 
 void ac_downloader(std::string src_ip, std::string src_port, std::string dest_node, std::string timeout, std::string remote_file ,std::string local_file)
 {
-    std::string filepathack = "/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin";
+    std::string filepathack = "/home/ctm/Documents/unet-3.4.0/scripts/bundleac.bin";
     std::string command = "python3 download_file.py " + src_ip + " " + src_port + " " + dest_node + " " + timeout + " " + remote_file + " " + local_file;
     int result = ::system(command.c_str());
     if (result != 0)
@@ -573,86 +466,78 @@ void ac_downloader(std::string src_ip, std::string src_port, std::string dest_no
 
 void ac_receiver(std::string src_ip, std::string src_port, std::string dest_node, int timeoutSeconds, std::string remote_filepath ,std::string local_filepath){
     while(!terminateFlag){
-        std::string command = "python3 download_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutSeconds) + " " + remote_filepath + " " + local_filepath;
+        std::string command = "python3 download_file.py " + src_ip + " " + src_port + " 10000 " + remote_filepath + " " + local_filepath;
         std::cout << command << std::endl;
         std::ifstream file(local_filepath);
-        if(file.good()){
             std::cout << "File is good" << std::endl;
             auto result = removeHeaderFlags(local_filepath);
             int sequenceNumber = std::get<0>(result);
             bool isLastChunk = std::get<1>(result);
+	    std::cout << " Ackmap: "<<(ackMap.find(sequenceNumber) == ackMap.end() && ackMap[sequenceNumber] != true) << std::endl;
+	    if(ackMap.find(sequenceNumber) == ackMap.end() && ackMap[sequenceNumber] != true){
+		    ackMap[sequenceNumber] = true;
+		    std::__cxx11::string filename2 = "Receiver/newbundleac.bin";
+		    ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::open(filename2);
+		    
+		    std::cout << "Received bundle: " << sequenceNumber << " on AC size: "<< chunkBlob.size() << std::endl;
+		    
+		    EID addr_src = EID("dtn://moreira-XPS-15-9570");
+		    EID addr_dest = EID("dtn://moreira-XPS-15-9570");
+		    dtn::data::Bundle bundle;
+		    bundle.source = addr_src;
+		    bundle.destination = addr_dest;
+		    bundle.push_back(chunkBlob);
+		    bundle.set(dtn::data::PrimaryBlock::LAST_BUNDLE, isLastChunk);
 
-            std::__cxx11::string filename2 = "Receiver/newbundleac.bin";
-            ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::open(filename2);
-            
-            std::cout << "Received bundle: " << sequenceNumber << " on AC size: "<< chunkBlob.size() << std::endl;
-            
-            EID addr_src = EID("dtn://moreira-XPS-15-9570");
-            EID addr_dest = EID("dtn://moreira-XPS-15-9570");
-            dtn::data::Bundle bundle;
-            bundle.source = addr_src;
-            bundle.destination = addr_dest;
-            bundle.push_back(chunkBlob);
-            bundle.set(dtn::data::PrimaryBlock::LAST_BUNDLE, isLastChunk);
+		    dtn::data::BundleID& id = bundle;
 
-            dtn::data::BundleID& id = bundle;
+		    // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
+		    id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
+		    if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
+		        {
+		            std::lock_guard<std::mutex> lock(bundleMapMutex);
+		            lastbundlefound = true;
+		            lastsequencenumber = sequenceNumber;
+		            // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
+		        }
 
-            // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
-            id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
-            if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
-                {
-                    std::lock_guard<std::mutex> lock(bundleMapMutex);
-                    lastbundlefound = true;
-                    lastsequencenumber = sequenceNumber;
-                    // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
-                }
+		    }
 
-            }
+		    if (sequenceNumber == nextExpectedBundle) {
+		        writeToFile(sequenceNumber, bundle,"ac");
+		    	bundleMap[sequenceNumber] = bundle;
+		    } else {
+		        {
+		            std::lock_guard<std::mutex> lock(bundleMapMutex);// Store the bundle in the map or update existing entry
+		            bundleMap[sequenceNumber] = bundle;
+		        } // The lock is automatically released when lock goes out of scope
+		    }
+		    
+		    std::string filenameac = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
+		    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
 
-            if (sequenceNumber == nextExpectedBundle) {
-                writeToFile(sequenceNumber, bundle,"ac");
-            } else {
-                {
-                    std::lock_guard<std::mutex> lock(bundleMapMutex);// Store the bundle in the map or update existing entry
-                    bundleMap[sequenceNumber] = bundle;
-                } // The lock is automatically released when lock goes out of scope
-            }
-            
-            std::string filenameac = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
-            ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
+		    std::string filenameack = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleack.bin";
+		    createChunkFile(sequenceNumber, ref, filenameack, false ,true); //overhead of 5 bytes
 
-            createChunkFile(sequenceNumber, ref, "/home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin", false ,true); //overhead of 5 bytes
-
-            std::string filenameack = "Sender/bundleack.bin";
-            std::string command = "python3 upload_file.py " + src_ip+ " " + src_port + " " + std::to_string(timeoutSeconds) + " " + filenameac + " bundleack.bin";
-            std::cout << command << std::endl;
-            int result1 = ::system(command.c_str());
-            if (result1 != 0){
-                std::cout << "Error uploading" << std::endl;
-            } else {
-                command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutSeconds) + " bundleack.bin";
-                std::cout << command << std::endl;
-                result1 = ::system(command.c_str()); 		
-                if (result1 != 0){
-                    std::cout << "Error sending through ac"<< std::endl;
-                }
-
-                std::string command2 = "rm /home/moreira/Documents/unet-3.4.0/scripts/bundleack.bin";
-                result1 = std::system(command2.c_str());
-                if (result1 == 0) {
-                    std::cout << "File removed successfully." << std::endl;
-                } else {
-                    std::cout << "Failed to remove file." << std::endl;
-                }
-            }
-        }else{
-            std::cout << "File is bad" << std::endl;
+		    std::string command = "python3 upload_file.py " + src_ip+ " " + src_port + " " + std::to_string(timeoutSeconds) + " " + filenameack + " /home/unet/scripts/bundleack.bin";
+		    std::cout << command << std::endl;
+		    int result1 = ::system(command.c_str());
+		    if (result1 != 0){
+		        std::cout << "Error uploading" << std::endl;
+		    } else {
+		        command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutSeconds) + " bundleack.bin";
+		        std::cout << command << std::endl;
+		        result1 = ::system(command.c_str()); 		
+		        if (result1 != 0){
+		            std::cout << "Error sending through ac"<< std::endl;
+		        }
+		}
         }
     }
 }
 
 void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination, const char* user,int n) {
-    bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath,user);
+    bool transferSuccess = transferFileToRemote(localFilePath, remoteFilePath,user);
     if (!transferSuccess) {
         std::cerr << "Error transferring file: " << localFilePath << std::endl;
         return;
@@ -727,7 +612,9 @@ void sendBundle(ssh_session session, const std::string localFilePath, const std:
 
 void receiver(ssh_session session, const char* user, const std::string& localFilePath, const std::string& remoteFilePath, const std::string ackdestination) {    
     int rc;
-
+    std::string ack_path = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleAck.bin";
+    std::string remote_ack_path = "/root/ibrdtn-repo/ibrdtn/tools/src/Sender/bundleACK.bin";
+    
     // Execute the receiver command in a loop
     while (!terminateFlag) {
 
@@ -762,7 +649,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
 
         if (exitStatus == 0) {
             // When the bundle is received, transfer it to the destination host
-            if (!transferFileFromRemote(session, remoteFilePath, localFilePath,user)) {
+            if (!transferFileFromRemote(remoteFilePath, localFilePath,user)) {
                 printf( "Error transferring bundle.bin from remote\n");
                 disconnect(channel);
                 return;
@@ -806,26 +693,26 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             deserializeBundleFromFile(localFilePath, bundle);
 
             dtn::data::BundleID& id = bundle;
-            // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
+            std::cout << user << ": Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << std::endl;
             int sequencenumber = std::stoi(id.sequencenumber.toString());
             if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
                 {
                     std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
                     lastbundlefound = true;
                     lastsequencenumber = sequencenumber;
-                    // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
+                    std::cout << "Last sequence number " << lastsequencenumber << std::endl;
                 }
   
             }
             {
                 std::lock_guard<std::mutex> lock(bundleMapMutex); // Acquire the lock
-                // std::cout << "Map size: " << bundleMap.size() << std::endl;
+                std::cout << "Map size: " << bundleMap.size() << " Condition: "<< (lastbundlefound && bundleMap.size() == lastsequencenumber || lastsequencenumber == 0) << std::endl;
                 if(lastbundlefound && bundleMap.size() == lastsequencenumber || lastsequencenumber == 0){
                     now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
                     //uint64_t seconds = now / 1000;
                     // std::cout << timeSinceEpochMillisec() << std::endl;
 
-                    // std::cout << now << std::endl;
+                    std::cout <<user <<": Time: "<< now << std::endl;
                     // std::cout << seconds << std::endl;
                     // std::cout << "Last received bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
 
@@ -835,6 +722,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             // std::cout << user << ": Received bundle: " << sequencenumber << std::endl;
             if (sequencenumber == nextExpectedBundle) {
                 writeToFile(sequencenumber, bundle,user);
+            	bundleMap[sequencenumber] = bundle;
             } else {
                 // Store the bundle in the map or update existing entry
                 {
@@ -842,10 +730,10 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
                     bundleMap[sequencenumber] = bundle;
                 } 
             }
-
-            dtn::data::Bundle ack = processACKBundle("/root/ibrdtn-repo/ibrdtn/tools/src/Sender/bundleACK.bin",bundle.destination,bundle.source,std::atoi(bundle.sequencenumber.toString().c_str()));
+            std:: cout << std::atoi(bundle.sequencenumber.toString().c_str()) << std::endl;
+            dtn::data::Bundle ack = processACKBundle(ack_path,bundle.destination,bundle.source,sequencenumber);
             // std::__cxx11::string source = bundle.source.getString() + "/ackRecv";
-            sendBundle(session,"Sender/bundleAck.bin","/root/ibrdtn-repo/ibrdtn/tools/src/Sender/bundleACK.bin",ackdestination,user, std::atoi(bundle.sequencenumber.toString().c_str()) );
+            sendBundle(session, ack_path, remote_ack_path, ackdestination, user ,sequencenumber );
         }
 
         disconnect(channel);
@@ -930,37 +818,37 @@ int main(int argc, char *argv[])
 
 	std::string filename;
 	dtn::data::EID group;
-    const char *host1 = "192.168.0.102";
-    const char *user1 = "root";
-    const char *port1 = "22";
-    const char *host2 = "192.168.0.105";
-    const char *user2 = "root";
-    const char *port2 = "22";
-    // const char* host1 = "192.168.0.103";
-    // const char* user1 = "root";
-    // const char* port1 = "22";
-    // const char* host2 = "192.168.0.106";
-    // const char* user2 = "root";
-    // const char* port2 = "22";
+    //const char *host1 = "192.168.0.102";
+    //const char *user1 = "root";
+    //const char *port1 = "22";
+    //const char *host2 = "192.168.0.105";
+    //const char *user2 = "root";
+    //const char *port2 = "22";
+    const char* host1 = "192.168.0.103";
+    const char* user1 = "root";
+    const char* port1 = "22";
+    const char* host2 = "192.168.0.106";
+    const char* user2 = "root";
+    const char* port2 = "22";
 
-    std::string file_destination1 = "dtn://B/ackRecv";
-    std::string file_destination2 = "dtn://A/ackRecv";
+    std::string file_destination1 = "dtn://A/ackRecv";
+    std::string file_destination2 = "dtn://B/ackRecv";
     // std::string file_destination1 = "dtn://D/ackRecv";
     // std::string file_destination2 = "dtn://C/ackRecv";
 
     //RF options
     const char* remoteFilePath = "/root/ibrdtn-repo/ibrdtn/tools/src/Receiver/bundle.bin";
-    const char* localFilePath1 = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle1.bin";
-    const char* localFilePath2 = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle2.bin";
+    const char* localFilePath1 = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle1.bin";
+    const char* localFilePath2 = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle2.bin";
     
 
     // AC options
-    std::string src_ip = "192.168.0.142";
-    std::string src_port = "1102";
-    std::string dest_node = "232";
-    int timeout_ac = 10;
-    std::string remote_filepath = "scripts/bundleac.bin";
-    std::string local_filepath = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundleac.bin";
+    std::string src_ip = "192.168.0.73";
+    std::string src_port = "1100";
+    std::string dest_node = "128";
+    int timeout_ac = 1000;
+    std::string remote_filepath = "/home/unet/scripts/bundleac.bin";
+    std::string local_filepath = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundleac.bin";
 
 
     // Check if a filename argument is provided
@@ -1033,7 +921,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel1, "dtnd -i wlan0");
+    rc = ssh_channel_request_exec(channel1, "dtnd -i wlan1");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
         ssh_channel_free(channel1);
@@ -1052,7 +940,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    rc = ssh_channel_request_exec(channel2, "dtnd -i wlan0");
+    rc = ssh_channel_request_exec(channel2, "dtnd -i wlan5");
     if (rc != SSH_OK) {
         fprintf(stderr, "Error executing command: %s\n", ssh_get_error(session2));
         ssh_channel_free(channel2);

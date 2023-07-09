@@ -24,6 +24,7 @@
 #include <mutex>
 #include <future>
 
+
 #include <chrono>
 #include <ctime>
 
@@ -237,10 +238,7 @@ WirelessInfo getWirelessInfo(ssh_session session, const std::string &interface, 
     return wirelessInfo;
 }
 
-int convertBitrateToBytes(const std::string &bitrateString)
-{
-    std::cout <<" Bitrate: " << bitrateString << std::endl;
-
+int convertBitrateToBytes(const std::string &bitrateString){
     std::istringstream iss(bitrateString);
     double bitrateValue = 0.0;
     std::string unit;
@@ -257,8 +255,6 @@ int convertBitrateToBytes(const std::string &bitrateString)
         }
         // Add more conversions for other units if needed
         int tmp = bitrateValue;
-        std::cout <<" Byterate: " << tmp << std::endl;
-
         return tmp;
     }
 
@@ -349,164 +345,45 @@ bool deserializeBundleFromFile(const std::string localFilePath, dtn::data::Bundl
     }
 }
 
-/**
- * Transfer a file to a remote server using SFTP.
- *
- * @param session         The SSH session established with the remote server.
- * @param localFilePath   The path to the local file to transfer.
- * @param remoteFilePath  The path to the remote file on the server.
- * @return                True if the file transfer is successful, false otherwise.
- */
-bool transferFileToRemote(ssh_session session, const std::string &localFilePath, const std::string &remoteFilePath, const char *user)
-{
-    // Open the file for reading
-    std::ifstream file(localFilePath, std::ios::binary);
-    if (!file.is_open())
+bool transferFileToRemote(const std::string& localFilePath, const std::string& remoteFilePath, const char* user) {
+    std::string scpCommand = "scp " + localFilePath + " root@" + user + ":" + remoteFilePath;
+    // Rest of the function implementation remains the same.
+
+    // Execute the scp command
+    int status = std::system(scpCommand.c_str());
+
+    // Check the exit status of the scp command
+    if (status == 0)
     {
-        std::cerr << "Error opening local file: " << localFilePath.c_str() << std::endl;
+        std::cout << "File copied successfully to remote server." << std::endl;
+        return true;
+    }
+    else
+    {
+        std::cerr << "Failed to copy file to remote server." << std::endl;
         return false;
     }
-
-    // Get the size of the file
-    file.seekg(0, std::ios::end);
-    std::streampos fileSize = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    // Allocate a buffer to store the file data
-    char *buffer = new char[fileSize];
-
-    // Read the file data into the buffer
-    file.read(buffer, fileSize);
-    file.close();
-
-    // Create an SFTP session
-    sftp_session sftp = sftp_new(session);
-    if (sftp == nullptr)
-    {
-        std::cerr << user << "Error creating SFTP session: " << ssh_get_error(session) << std::endl;
-        delete[] buffer;
-        return false;
-    }
-
-    // Initialize the SFTP session
-    int rc = sftp_init(sftp);
-    if (rc != SSH_OK)
-    {
-        std::cerr << user << ": Error opening remote file: " << remoteFilePath.c_str() << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Open a file on the remote server for writing
-    sftp_file remoteFile = sftp_open(sftp, remoteFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
-    if (remoteFile == nullptr)
-    {
-        std::cerr << user << ": Error opening remote file: " << remoteFilePath.c_str() << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Write the file data to the remote file
-    // std::cout << "Size of the file/bundle being sent: " << fileSize << std::endl;
-    rc = sftp_write(remoteFile, buffer, fileSize);
-    if (rc < 0)
-    {
-        std::cerr << user << ": Error writing to remote file: " << remoteFilePath.c_str() << ssh_get_error(session) << std::endl;
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        delete[] buffer;
-        return false;
-    }
-
-    // Close the remote file and free the SFTP session
-    sftp_close(remoteFile);
-    sftp_free(sftp);
-    delete[] buffer;
-    dtn::data::Bundle b1;
-    deserializeBundleFromFile(localFilePath, b1);
-    dtn::data::BundleID &id = b1;
-
-    return true;
 }
 
-bool transferFileFromRemote(ssh_session session, const std::string &remoteFilePath, const std::string &localFilePath, const char *user)
+bool transferFileFromRemote(const std::string& remoteFilePath, const std::string& localFilePath, const char* user)
 {
-    // Create an SFTP session
-    sftp_session sftp = sftp_new(session);
-    if (sftp == nullptr)
+    std::string scpCommand = "scp root@" + std::string(user) + ":" + remoteFilePath + " " + localFilePath;
+    // Rest of the function implementation remains the same.
+
+    // Execute the scp command
+    int status = std::system(scpCommand.c_str());
+
+    // Check the exit status of the scp command
+    if (status == 0)
     {
-        std::cerr << "Error creating SFTP session: " << ssh_get_error(session) << std::endl;
+        std::cout << "Files copied successfully from remote server." << std::endl;
+        return true;
+    }
+    else
+    {
+        std::cerr << "Failed to copy files from remote server." << std::endl;
         return false;
     }
-
-    // Initialize the SFTP session
-    int rc = sftp_init(sftp);
-    if (rc != SSH_OK)
-    {
-        std::cerr << "Error initializing SFTP session: " << ssh_get_error(session) << std::endl;
-        sftp_free(sftp);
-        return false;
-    }
-
-    // Open the remote file for reading
-    sftp_file remoteFile = sftp_open(sftp, remoteFilePath.c_str(), O_RDONLY, 0);
-    if (remoteFile == nullptr)
-    {
-        std::cerr << "Error opening remote file: " << ssh_get_error(session) << " " << remoteFilePath << " on " << user << std::endl;
-        sftp_free(sftp);
-        return false;
-    }
-
-    // Create a local file for writing
-    std::ofstream localFile(localFilePath, std::ios::binary);
-    if (!localFile.is_open())
-    {
-        std::cerr << "Error creating local file" << std::endl;
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        return false;
-    }
-
-    sftp_attributes attrs = sftp_fstat(remoteFile);
-    if (!attrs)
-    {
-        std::cerr << "Error getting file attributes: " << ssh_get_error(session) << std::endl;
-        localFile.close();
-        sftp_close(remoteFile);
-        sftp_free(sftp);
-        return false;
-    }
-
-    // Read the remote file data and write it to the local file
-    const int bufferSize = attrs->size;
-    // const int bufferSize = 1024;
-    // std::cout << bufferSize << std::endl;
-    char buffer[bufferSize];
-    ssize_t bytesRead;
-    do
-    {
-        bytesRead = sftp_read(remoteFile, buffer, bufferSize);
-        if (bytesRead > 0)
-        {
-            localFile.write(buffer, bytesRead);
-        }
-        else if (bytesRead < 0)
-        {
-            std::cerr << "Error reading remote file: " << ssh_get_error(session) << std::endl;
-            localFile.close();
-            sftp_close(remoteFile);
-            sftp_free(sftp);
-            return false;
-        }
-    } while (bytesRead > 0);
-
-    // Close the local file, remote file, and free the SFTP session
-    localFile.close();
-    sftp_close(remoteFile);
-    sftp_free(sftp);
-    return true;
 }
 
 void receiver(ssh_session session, const char *user, const std::string &localFilePath, const std::string &remoteFilePath, int timeoutSeconds, int nextExpectedBundle)
@@ -566,7 +443,7 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
         if (exitStatus == 0)
         {
             // When the bundle is received, transfer it to the destination host
-            if (!transferFileFromRemote(session, remoteFilePath, localFilePath, user))
+            if (!transferFileFromRemote(remoteFilePath, localFilePath, user))
             {
                 printf("Error transferring bundle.bin from remote\n");
                 disconnect(channel);
@@ -637,7 +514,7 @@ void receiver(ssh_session session, const char *user, const std::string &localFil
 
 void sendBundle(ssh_session session, const std::string localFilePath, const std::string remoteFilePath, const std::string destination, const char *user, const std::string ackdest, int nextExpectedBundle, int timeout_rf)
 {
-    bool transferSuccess = transferFileToRemote(session, localFilePath, remoteFilePath, user);
+    bool transferSuccess = transferFileToRemote( localFilePath, remoteFilePath, user);
     if (!transferSuccess)
     {
         std::cerr << "Error transferring file: " << localFilePath << std::endl;
@@ -1030,15 +907,10 @@ int decision_unit(WirelessInfo wirelessInfo1, WirelessInfo wirelessInfo2, int da
         {
             channelsize1 = convertBitrateToBytes(wirelessInfo1.bitRate);
             ret = 1;
-            std::cout <<" Channelsize: " << channelsize1 << std::endl;
-
             if (channelsize1 > 250000)
             {
                 channelsize1 = 250000;
-            }
-            std::cout <<" Channelsize: " << channelsize1 << std::endl;
-
-            
+            }            
         }
         else if (wirelessInfo1.state == OFF && wirelessInfo2.state == ACTIVE) // rf2;
         {
@@ -1049,7 +921,6 @@ int decision_unit(WirelessInfo wirelessInfo1, WirelessInfo wirelessInfo2, int da
             {
                 channelsize2 = 250000;
             }
-            std::cout <<" Channelsize: " << channelsize2 << std::endl;
         }
         else if (wirelessInfo1.state == HANDOVER && wirelessInfo2.state == HANDOVER)
         {
@@ -1175,18 +1046,17 @@ void ac_sender(std::string src_ip, std::string src_port, std::string dest_node, 
     uint64_t start = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
     std::string filepathac = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleac.bin";
-    std::string command = "python3 upload_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutRequestMiliSeconds) + " " + filenameac + " bundleac.bin";
+    std::string command = "python3 upload_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutRequestMiliSeconds) + " " + filepathac + " /home/unet/scripts/bundleac.bin";
     int result = ::system(command.c_str());
     std::cout << command << std::endl;
 
     if (result != 0)
-
     {
         std::cout << "Error uploading" << std::endl;
     }
 
     filepathac = "bundleac.bin";
-    command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutRequestMiliSeconds) + " " + filepathac;
+    command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutRequestMiliSeconds) + " bundleac.bin";
     std::cout << command << std::endl;
 
     result = ::system(command.c_str());
@@ -1204,7 +1074,7 @@ void ac_sender(std::string src_ip, std::string src_port, std::string dest_node, 
         {
             return;
         }
-        command = "python3 download_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutRequestMiliSeconds) + " scripts/bundleack.bin " + filepathack;
+        command = "python3 download_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutRequestMiliSeconds) + " /home/unet/scripts/bundleack.bin " + filepathack;
         std::cout << command << std::endl;
 
         result = ::system(command.c_str());
@@ -1216,6 +1086,7 @@ void ac_sender(std::string src_ip, std::string src_port, std::string dest_node, 
             int sequenceNumber1 = std::get<0>(result);
             bool isLastChunk = std::get<1>(result);
             ack_received = std::get<2>(result) && sequenceNumber1 == expectedsequencenumber;
+            std::cout << "Bundle: " << sequenceNumber1 << " Expected sequence number: " << expectedsequencenumber << " FLAG: "<< ack_received << " Is last chunk: " << isLastChunk << std::endl;
             if (ack_received)
             {
                 ackMap[sequenceNumber1] = true;
@@ -1267,7 +1138,7 @@ int main(int argc, char *argv[])
     // const char *user2 = "root";
     // const char *port2 = "22";
 
-    int timeout_rf = 2;
+    int timeout_rf = 20;
 
     std::string file_destination1 = "dtn://C/dtnRecv";
     std::string file_destination2 = "dtn://D/dtnRecv";
@@ -1280,14 +1151,14 @@ int main(int argc, char *argv[])
     EID addr_dest = EID("dtn://moreira-XPS-15-9570");
 
     // AC options
-    std::string src_ip = "192.168.0.142";                                                           // 192.168.111.103
-    std::string src_port = "1101";                                                                  // 1100
-    std::string dest_node = "31";                                                                   // 128
-    std::string filenameac = "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleac.bin"; // "home/unet/scripts/bundleac.bin"
-    std::string filepathack = "/home/moreira/Documents/unet-3.4.0/scripts/bundleac.bin";
+    std::string src_ip = "192.168.0.137";                                                           // 192.168.0.137
+    std::string src_port = "1100";                                                                  // 1100
+    std::string dest_node = "236";                                                                  // 236
+    std::string filenameac = "/home/unet/scripts/bundleac.bin";                                      // "home/unet/scripts/bundleac.bin"
+    std::string filepathack = "/home/unet/scripts/bundleack.bin";
     std::string remotePath = "bundle.bin";
-    int timeoutreceiver = 5;            // this is in seconds
-    int timeoutRequestMiliSeconds = 10; // this is in miliseconds
+    int timeoutreceiver = 30;            // this is in seconds
+    int timeoutRequestMiliSeconds = 1000; // this is in miliseconds
     int ac_mtu = 56;                    // 128
     ac_mtu = ac_mtu - 5;
     bool ac_state = false;
@@ -1428,10 +1299,11 @@ int main(int argc, char *argv[])
         wirelessInfo1 = getWirelessInfo(session1, "wlan0", 2442);
         wirelessInfo2 = getWirelessInfo(session2, "wlan0", 5180);
         int condition = decision_unit(wirelessInfo1, wirelessInfo2, datasent, ref.size(), false, ac_mtu);
-        condition = 3;
+        condition = 2;
         channelsize2 = 250000;
         if (condition == 0)
         {
+            std::cout<<"here"<<std::endl;
             bool last = false;
             ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 123, nextExpectedBundle);
             if (lastbundle_sequence == nextExpectedBundle)
@@ -1440,13 +1312,6 @@ int main(int argc, char *argv[])
                 last = true;
             }
             createChunkFile(nextExpectedBundle, ref1, "/home/moreira/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleac.bin", last, false); // overhead of 5 bytes
-
-            std::string command = "python3 upload_file.py " + src_ip + " " + src_port + " " + std::to_string(timeoutRequestMiliSeconds) + " " + filenameac + " " + filepathack;
-            int result = ::system(command.c_str());
-            if (result != 0)
-            {
-                std::cout << "Error uploadding to ac modem!" << std::endl;
-            }
 
             ac_sender(src_ip, src_port, dest_node, timeoutreceiver, timeoutRequestMiliSeconds, filenameac, nextExpectedBundle);
 
@@ -1462,7 +1327,7 @@ int main(int argc, char *argv[])
         else if (condition == 1)
         {
             std::cout << "HEre" << std::endl;
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 250000, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 6750000, nextExpectedBundle);
             // std::cout <<host1 << ": Size: " << channelsize1 << std::endl;
             b1 = processBundle(ref1, localFilePath2, addr_source, addr_dest, nextExpectedBundle);
             if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
@@ -1471,7 +1336,7 @@ int main(int argc, char *argv[])
                 // uint64_t seconds = now / 1000;
             }
 
-            sendBundle(session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, 5);
+            sendBundle(session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, timeout_rf);
             if (!ackMap.empty())
             {
                 if ((ackMap.find(std::atoi(b1.sequencenumber.toString().c_str())) != ackMap.end()) && ackMap[std::atoi(b1.sequencenumber.toString().c_str())] == true)
@@ -1487,7 +1352,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 2)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 50000, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 6750000, nextExpectedBundle);
 
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
@@ -1512,7 +1377,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 3)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 50000, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 250000, nextExpectedBundle);
 
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
@@ -1546,7 +1411,7 @@ int main(int argc, char *argv[])
         }
         else if (condition == 4)
         {
-            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 250000, nextExpectedBundle);
+            ibrcommon::BLOB::Reference ref1 = getBlobChunk(ref, 6750000, nextExpectedBundle);
             int temp = nextExpectedBundle;
             b1 = processBundle(ref1, localFilePath1, addr_source, addr_dest, nextExpectedBundle);
             std::cout << "HERE" << std::endl;
@@ -1554,18 +1419,22 @@ int main(int argc, char *argv[])
             nextExpectedBundle = findnextsequencenumber(nextExpectedBundle + 1);
             // std::cout << "Sequence of 2nd number = " << nextExpectedBundle << std::endl;
 
-            // mudar o tamanho na condição
-            if (ref1.size() >= 250000)
+            if (std::atoi(b1.sequencenumber.toString().c_str()) == 0)
             {
-                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref, 250000, nextExpectedBundle);
+                now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                std::cout<< now <<endl;
+            }
+            // mudar o tamanho na condição
+            if (ref1.size() >= 6750000)
+            {
+                ibrcommon::BLOB::Reference ref2 = getBlobChunk(ref, 6750000, nextExpectedBundle);
                 b2 = processBundle(ref2, localFilePath2, addr_source, addr_dest, nextExpectedBundle);
             }
 
-            now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
             // uint64_t seconds = now / 1000;
 
             // sender threads
-            if (ref1.size() >= 250000)
+            if (ref1.size() >= 6750000)
             {
                 std::thread senderThread2(sendBundle, session2, localFilePath1, remoteFilePath, file_destination2, host2, "Receiver/bundleack2.bin", temp, timeout_rf);
                 std::thread senderThread1(sendBundle, session1, localFilePath2, remoteFilePath, file_destination1, host1, "Receiver/bundleack1.bin", nextExpectedBundle, timeout_rf);
