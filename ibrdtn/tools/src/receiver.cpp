@@ -36,7 +36,7 @@ int nextExpectedBundle = 0;
 int exitStatus = 0;
 int lastsequencenumber = -1;
 bool lastbundlefound = false;
-
+bool isretransmission = true;
 std::fstream file;
 std::map<int,bool > ackMap;
 std::map<int, dtn::data::Bundle> bundleMap;
@@ -46,8 +46,7 @@ std::mutex stopMutex;
 std::time_t currentTime;
 uint64_t now;
 
-void print_help()
-{
+void print_help(){
 	std::cout << "-- Receiver --" << std::endl
 			<< "Required parameters: " << std::endl 
 			<< " --file <path>    Write the incoming data to this file" << std::endl << std::endl
@@ -153,8 +152,7 @@ bool transferFileToRemote(const std::string& localFilePath, const std::string& r
     }
 }
 
-bool transferFileFromRemote(const std::string& remoteFilePath, const std::string& localFilePath, const char* user)
-{
+bool transferFileFromRemote(const std::string& remoteFilePath, const std::string& localFilePath, const char* user){
     std::string scpCommand = "scp root@" + std::string(user) + ":" + remoteFilePath + " " + localFilePath;
     // Rest of the function implementation remains the same.
 
@@ -369,46 +367,39 @@ void writeToFile(int bundleNumber, dtn::data::Bundle& bundle,const char* user) {
     }
 }
 
-std::tuple<int, bool, bool> removeHeaderFlags(const std::string& filename)
-{
-    // Open the original file
+std::tuple<int, bool, bool, bool> removeHeaderFlags(const std::string &filename) {
     std::ifstream originalFile(filename, std::ios::binary);
     if (!originalFile.is_open()) {
-        // File opening failed
         std::cerr << "Failed to open file: " << filename << std::endl;
-        return std::make_tuple(-1, false, false);
+        return std::make_tuple(-1, false, false, false);
     }
 
-    // Get the size of the file
     originalFile.seekg(0, std::ios::end);
     std::streampos fileSize = originalFile.tellg();
     originalFile.seekg(0, std::ios::beg);
 
-    // Read the header flags
     char flags;
     int sequenceNumber;
     bool lastChunkFlag;
     bool ackFlag;
+    bool retransmissionFlag;  // New flag for retransmission
 
     originalFile.read(&flags, sizeof(flags));
-    originalFile.read(reinterpret_cast<char*>(&sequenceNumber), sizeof(sequenceNumber));
+    originalFile.read(reinterpret_cast<char *>(&sequenceNumber), sizeof(sequenceNumber));
 
-    lastChunkFlag = (flags & 0x01) != 0;  // Extract last chunk flag from flags
-    ackFlag = (flags & 0x02) != 0;        // Extract ACK flag from flags
+    lastChunkFlag = (flags & 0x01) != 0;
+    ackFlag = (flags & 0x02) != 0;
+    retransmissionFlag = (flags & 0x04) != 0;  // Extract retransmission flag from flags
 
-    // Calculate the size of the remaining data
     std::streampos remainingSize = fileSize - sizeof(flags) - sizeof(sequenceNumber);
 
-    // Open a new file for writing the data without the header flags
     std::ofstream outputFile("Receiver/newbundleac.bin", std::ios::binary);
     if (!outputFile.is_open()) {
-        // File creation failed
         std::cerr << "Failed to create file: newbundleac.bin" << filename << std::endl;
         originalFile.close();
-        return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag);
+        return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag, retransmissionFlag);
     }
 
-    // Copy the data without the header flags
     char buffer[1024];
     std::streampos bytesRead = 0;
     while (bytesRead < remainingSize) {
@@ -418,11 +409,10 @@ std::tuple<int, bool, bool> removeHeaderFlags(const std::string& filename)
         bytesRead += chunkSize;
     }
 
-    // Close the files
     originalFile.close();
     outputFile.close();
 
-    return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag);
+    return std::make_tuple(sequenceNumber, lastChunkFlag, ackFlag, retransmissionFlag);
 }
 
 void createChunkFile(int sequenceNumber, const ibrcommon::BLOB::Reference& chunkBlob, std::string filename, bool isLastChunk, bool ackFlag)
@@ -453,85 +443,97 @@ void createChunkFile(int sequenceNumber, const ibrcommon::BLOB::Reference& chunk
     }
 }
 
-void ac_downloader(std::string src_ip, std::string src_port, std::string dest_node, std::string timeout, std::string remote_file ,std::string local_file)
-{
-    std::string filepathack = "/home/ctm/Documents/unet-3.4.0/scripts/bundleac.bin";
-    std::string command = "python3 download_file.py " + src_ip + " " + src_port + " " + dest_node + " " + timeout + " " + remote_file + " " + local_file;
-    int result = ::system(command.c_str());
-    if (result != 0)
-    {
-        std::cout << "Error sending through ac" << std::endl;
-    }
-}
-
 void ac_receiver(std::string src_ip, std::string src_port, std::string dest_node, int timeoutSeconds, std::string remote_filepath ,std::string local_filepath){
     while(!terminateFlag){
         std::string command = "python3 download_file.py " + src_ip + " " + src_port + " 10000 " + remote_filepath + " " + local_filepath;
-        std::cout << command << std::endl;
-        std::ifstream file(local_filepath);
-            std::cout << "File is good" << std::endl;
+        //std::cout << command << std::endl;
+        int result = ::system(command.c_str());
+        if(result == 0){
+            std::ifstream file(local_filepath);
             auto result = removeHeaderFlags(local_filepath);
             int sequenceNumber = std::get<0>(result);
             bool isLastChunk = std::get<1>(result);
-	    std::cout << " Ackmap: "<<(ackMap.find(sequenceNumber) == ackMap.end() && ackMap[sequenceNumber] != true) << std::endl;
-	    if(ackMap.find(sequenceNumber) == ackMap.end() && ackMap[sequenceNumber] != true){
-		    ackMap[sequenceNumber] = true;
-		    std::__cxx11::string filename2 = "Receiver/newbundleac.bin";
-		    ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::open(filename2);
+            bool ack_restransmission = std::get<2>(result);
+            bool retransmission = std::get<3>(result);
+
+            //Enviar ack só se receber outra vez o pacote para evitar timeout
+            if(isretransmission ^ ack_restransmission){
+                ackMap[sequenceNumber] = false;
+                isretransmission = ack_restransmission;
+                std::cout << "Is retransmission" << std::endl;
+            }
 		    
-		    std::cout << "Received bundle: " << sequenceNumber << " on AC size: "<< chunkBlob.size() << std::endl;
-		    
-		    EID addr_src = EID("dtn://moreira-XPS-15-9570");
-		    EID addr_dest = EID("dtn://moreira-XPS-15-9570");
-		    dtn::data::Bundle bundle;
-		    bundle.source = addr_src;
-		    bundle.destination = addr_dest;
-		    bundle.push_back(chunkBlob);
-		    bundle.set(dtn::data::PrimaryBlock::LAST_BUNDLE, isLastChunk);
+            std::cout << "Retransmission : " << retransmission << std::endl;
+            //std::cout << " Ackmap: "<<(ackMap[sequenceNumber]==true) << std::endl;
+            if(bundleMap.find(sequenceNumber) == bundleMap.end() || retransmission){
+                if(ackMap[sequenceNumber] != true){
+                    ackMap[sequenceNumber] = true;
+                    
+                    std::__cxx11::string filename2 = "Receiver/newbundleac.bin";
+                    ibrcommon::BLOB::Reference chunkBlob = ibrcommon::BLOB::open(filename2);
+                    
+                    std::cout << "AC: Received bundle: " << sequenceNumber << " size: "<< chunkBlob.size() << std::endl;
+                    
+                    EID addr_src = EID("dtn://moreira-XPS-15-9570");
+                    EID addr_dest = EID("dtn://moreira-XPS-15-9570");
+                    
+                    dtn::data::Bundle bundle;
+                    bundle.source = addr_src;
+                    bundle.destination = addr_dest;
+                    bundle.push_back(chunkBlob);
+                    bundle.set(dtn::data::PrimaryBlock::LAST_BUNDLE, isLastChunk);
+                    dtn::data::BundleID& id = bundle;
 
-		    dtn::data::BundleID& id = bundle;
+                    id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
+                    
+                    if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
+                        {
+                            std::lock_guard<std::mutex> lock(bundleMapMutex);
+                            lastbundlefound = true;
+                            lastsequencenumber = sequenceNumber;
+                            // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
+                        }
 
-		    // std::cout << "Bundle: " << bundle.sequencenumber.toString().c_str() << " FLAG: "<<bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) << " VM: " << user << std::endl;
-		    id.sequencenumber.fromString(std::to_string(sequenceNumber).c_str());
-		    if(bundle.get(dtn::data::PrimaryBlock::LAST_BUNDLE) == true){
-		        {
-		            std::lock_guard<std::mutex> lock(bundleMapMutex);
-		            lastbundlefound = true;
-		            lastsequencenumber = sequenceNumber;
-		            // std::cout << "Last sequence number " << lastsequencenumber << std::endl;
-		        }
+                    }
 
-		    }
+                    if(lastbundlefound && bundleMap.size() == lastsequencenumber || lastsequencenumber == 0){
+                        now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    }
 
-		    if (sequenceNumber == nextExpectedBundle) {
-		        writeToFile(sequenceNumber, bundle,"ac");
-		    	bundleMap[sequenceNumber] = bundle;
-		    } else {
-		        {
-		            std::lock_guard<std::mutex> lock(bundleMapMutex);// Store the bundle in the map or update existing entry
-		            bundleMap[sequenceNumber] = bundle;
-		        } // The lock is automatically released when lock goes out of scope
-		    }
-		    
-		    std::string filenameac = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
-		    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
+                    if (sequenceNumber == nextExpectedBundle) {
+                        writeToFile(sequenceNumber, bundle,"ac");
+                        bundleMap[sequenceNumber] = bundle;
+                    } else {
+                        {
+                            std::lock_guard<std::mutex> lock(bundleMapMutex);
+                            bundleMap[sequenceNumber] = bundle;
+                        }
+                    }
+                    
+                    std::string filenameac = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/ack.txt";
+                    ibrcommon::BLOB::Reference ref = ibrcommon::BLOB::open(filenameac);
 
-		    std::string filenameack = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleack.bin";
-		    createChunkFile(sequenceNumber, ref, filenameack, false ,true); //overhead of 5 bytes
+                    std::string filenameack = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Sender/bundleack.bin";
+                    createChunkFile(sequenceNumber, ref, filenameack, false ,true); //overhead of 5 bytes
 
-		    std::string command = "python3 upload_file.py " + src_ip+ " " + src_port + " " + std::to_string(timeoutSeconds) + " " + filenameack + " /home/unet/scripts/bundleack.bin";
-		    std::cout << command << std::endl;
-		    int result1 = ::system(command.c_str());
-		    if (result1 != 0){
-		        std::cout << "Error uploading" << std::endl;
-		    } else {
-		        command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutSeconds) + " bundleack.bin";
-		        std::cout << command << std::endl;
-		        result1 = ::system(command.c_str()); 		
-		        if (result1 != 0){
-		            std::cout << "Error sending through ac"<< std::endl;
-		        }
-		}
+                    std::string command = "python3 upload_file.py " + src_ip+ " " + src_port + " " + std::to_string(timeoutSeconds) + " " + filenameack + " /home/unet/scripts/bundleack.bin";
+                    std::cout << command << std::endl;
+                    int result1 = ::system(command.c_str());
+                    if (result1 != 0){
+                        std::cout << "Error uploading" << std::endl;
+                    } else {
+                        command = "python3 ac_sender.py " + src_ip + " " + src_port + " " + dest_node + " " + std::to_string(timeoutSeconds) + " bundleack.bin";
+                        std::cout << command << std::endl;
+                        result1 = ::system(command.c_str()); 		
+                        if (result1 != 0){
+                            std::cout << "Error sending through ac"<< std::endl;
+                        }
+                    }
+                }
+            }        
+        }
+        else{
+            std::cout << "File not downloaded!" << std::endl;
         }
     }
 }
@@ -634,7 +636,7 @@ void receiver(ssh_session session, const char* user, const std::string& localFil
             disconnect(channel);
             return;
         }
-        // std::cout << user << ": "<< command.c_str() <<std::endl;
+        std::cout << user << ": "<< command.c_str() <<std::endl;
 
         ssh_channel_set_blocking(channel,0);
         int exitStatus = ssh_channel_get_exit_status(channel);
@@ -840,12 +842,11 @@ int main(int argc, char *argv[])
     const char* remoteFilePath = "/root/ibrdtn-repo/ibrdtn/tools/src/Receiver/bundle.bin";
     const char* localFilePath1 = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle1.bin";
     const char* localFilePath2 = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundle2.bin";
-    
 
     // AC options
-    std::string src_ip = "192.168.0.73";
+    std::string src_ip = "192.168.0.178";
     std::string src_port = "1100";
-    std::string dest_node = "128";
+    std::string dest_node = "236";
     int timeout_ac = 1000;
     std::string remote_filepath = "/home/unet/scripts/bundleac.bin";
     std::string local_filepath = "/home/ctm/Documents/ibrdtn/ibrdtn/tools/src/Receiver/bundleac.bin";
@@ -957,11 +958,11 @@ int main(int argc, char *argv[])
 
     std::thread receiverThread2(receiver,session2 ,host2,localFilePath2,remoteFilePath,file_destination2);
     std::thread receiverThread1(receiver,session1 ,host1,localFilePath1,remoteFilePath,file_destination1);
-    //std::thread receiverThread3(ac_receiver,src_ip,src_port, dest_node, timeout_ac, remote_filepath, local_filepath);
+    std::thread receiverThread3(ac_receiver,src_ip,src_port, dest_node, timeout_ac, remote_filepath, local_filepath);
 
     receiverThread2.join();
     receiverThread1.join();
-    //receiverThread3.join();
+    receiverThread3.join();
 
     file.close();
 	disconnect(channel2);
