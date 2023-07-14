@@ -1,0 +1,19 @@
+Before running:
+	1- Access each alix.
+	2- In each alix run the ad-hoc network configuration script: netconf.sh (from now on each alix will be referenced as node <X>)
+	3- In node B and node D change the wlan operating frequency from 2.4 to 5.0 GHz. (iw dev wlan<x> set channel 36) 
+	4- You might wanna check the connection.
+	Ip's:
+		A	-	10.0.0.1	-	192.168.0.102
+		B	-	10.0.0.2	-	192.168.0.105
+		c	-	10.0.0.3	-	192.168.0.103
+		D	-	10.0.0.6	-	192.168.0.106
+	5- Access each acoustical modem: 192.168.0.218 , 192.168.0.178
+	6- Enable remote mode: remote.enalbe = true
+
+To compile:
+	1- Go to: /Documents/ibrdtn/ibrdtn/tools/src/
+	2- sudo make install
+To run:
+	1- Execute the sender: sender_v2 --file <<name of the file>>
+	2- Execute the receiver: receiver --file <<name of the file>>
