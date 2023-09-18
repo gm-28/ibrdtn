@@ -41,9 +41,9 @@ bool lastbundle = false;
 int lastbundle_sequence = -1;
 int datasent = 0;
 
-double rf_low_th_24ghz = 8;
+double rf_low_th_24ghz = 4;
 double rf_high_th_24ghz = 15;
-double rf_low_th_5ghz = 8;
+double rf_low_th_5ghz = 4;
 double rf_high_th_5ghz = 25;
 
 int channelsize1 = 0;
